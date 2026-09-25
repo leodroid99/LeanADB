@@ -1,0 +1,83 @@
+name: test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-powershell:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse PowerShell source
+        shell: powershell
+        run: |
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path '.\LeanADB.ps1'),
+            [ref]$null,
+            [ref]$errors
+          )
+          if ($errors.Count) { $errors | Format-List; exit 1 }
+      - name: Run isolated install/update/uninstall smoke test
+        shell: powershell
+        run: .\tests\Smoke-Test.ps1
+      - name: Run path, signature, launcher, and cleanup regression test
+        shell: powershell
+        run: .\tests\Regression-Test.ps1
+      - name: Verify language selection and translation coverage
+        shell: powershell
+        run: .\tests\Localization-Test.ps1
+      - name: Verify sideload targeting and cleanup
+        shell: powershell
+        run: .\tests\Menu-Actions-Test.ps1
+      - name: Verify drag-and-drop argument safety
+        shell: powershell
+        run: .\tests\Drag-Drop-Test.ps1
+      - name: Verify local ZIP installation and archive safety
+        shell: powershell
+        run: .\tests\Offline-Test.ps1
+      - name: Build and verify bootstrap release
+        shell: powershell
+        run: |
+          .\build\Build-Release.ps1
+          .\tests\Release-Test.ps1
+          .\tests\Self-Update-Test.ps1
+
+  powershell-7:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse source and locale
+        shell: pwsh
+        run: |
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path '.\LeanADB.ps1'),
+            [ref]$null,
+            [ref]$errors
+          )
+          if ($errors.Count) { $errors | Format-List; exit 1 }
+          Get-Content '.\locales\ko.json' -Raw -Encoding UTF8 | ConvertFrom-Json | Out-Null
+      - name: Run PowerShell 7 smoke test
+        shell: pwsh
+        run: .\tests\Smoke-Test.ps1
+      - name: Run PowerShell 7 regression test
+        shell: pwsh
+        run: .\tests\Regression-Test.ps1
+      - name: Verify PowerShell 7 language behavior
+        shell: pwsh
+        run: .\tests\Localization-Test.ps1
+      - name: Verify PowerShell 7 menu actions
+        shell: pwsh
+        run: .\tests\Menu-Actions-Test.ps1
+      - name: Verify PowerShell 7 drag-and-drop launcher
+        shell: pwsh
+        run: .\tests\Drag-Drop-Test.ps1
+      - name: Verify PowerShell 7 offline installation
+        shell: pwsh
+        run: .\tests\Offline-Test.ps1
