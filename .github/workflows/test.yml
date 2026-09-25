@@ -32,6 +32,9 @@ jobs:
       - name: Verify language selection and translation coverage
         shell: powershell
         run: .\tests\Localization-Test.ps1
+      - name: Verify release manifest response parsing
+        shell: powershell
+        run: .\tests\Manifest-Test.ps1
       - name: Verify sideload targeting and cleanup
         shell: powershell
         run: .\tests\Menu-Actions-Test.ps1
@@ -72,6 +75,9 @@ jobs:
       - name: Verify PowerShell 7 language behavior
         shell: pwsh
         run: .\tests\Localization-Test.ps1
+      - name: Verify PowerShell 7 manifest response parsing
+        shell: pwsh
+        run: .\tests\Manifest-Test.ps1
       - name: Verify PowerShell 7 menu actions
         shell: pwsh
         run: .\tests\Menu-Actions-Test.ps1

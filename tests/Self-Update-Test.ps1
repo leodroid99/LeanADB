@@ -79,6 +79,7 @@ try {
     if ($afterFailureState.LeanADBVersion -ne $manifest.Version -or $afterFailureHash -ne $beforeScriptHash) {
         throw 'Self-update rollback did not restore files and state after verification failure.'
     }
+    $global:LASTEXITCODE = 0
     Write-Host "LeanADB self-update test passed for $($manifest.Version)."
 }
 finally {

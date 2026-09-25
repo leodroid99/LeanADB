@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.1
+
+- Parse GitHub release manifests served as octet-stream bytes on Windows PowerShell, so LeanADB self-update checks work with the public release URL.
+- Keep the expected-failure self-update regression from reporting a false CI failure.
+
 ## 1.0.0
 
 - Add a Windows drag-and-drop launcher for APK installation and general file transfer, including mixed drops and multiple devices.

@@ -28,7 +28,7 @@ $ProgressPreference = 'SilentlyContinue'
 
 $script:ProductId = 'LeanADB'
 $script:ActiveOutputFolder = ''
-$script:ProductVersion = '1.0.0'
+$script:ProductVersion = '1.0.1'
 $versionFile = Join-Path $PSScriptRoot 'VERSION'
 if (Test-Path -LiteralPath $versionFile -PathType Leaf) {
     $versionText = (Get-Content -LiteralPath $versionFile -Raw -Encoding UTF8).Trim()
@@ -507,7 +507,15 @@ function Get-ProductManifest {
         if ($uri.Scheme -ne 'https') {
             throw 'The LeanADB update manifest must use HTTPS.'
         }
-        $manifest = Invoke-RestMethod -Uri $uri.AbsoluteUri -UseBasicParsing -TimeoutSec 10
+        $response = Invoke-WebRequest -Uri $uri.AbsoluteUri -UseBasicParsing -TimeoutSec 10
+        $manifestText = if ($response.Content -is [byte[]]) {
+            [Text.Encoding]::UTF8.GetString($response.Content)
+        }
+        else {
+            [string]$response.Content
+        }
+        if ($manifestText.Length -gt 1MB) { throw $script:Messages.InvalidManifest }
+        $manifest = $manifestText.TrimStart([char]0xFEFF) | ConvertFrom-Json
     }
     if ($null -eq $manifest -or $manifest.ProductId -ne $script:ProductId -or
         -not $manifest.Version -or -not $manifest.Package -or
