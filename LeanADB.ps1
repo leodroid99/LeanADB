@@ -19,6 +19,7 @@ param(
     [switch]$NoShortcut,
     [switch]$Force,
     [switch]$ConfirmUninstall,
+    [switch]$SkipProductUpdate,
     [switch]$Quiet
 )
 
@@ -28,7 +29,15 @@ $ProgressPreference = 'SilentlyContinue'
 
 $script:ProductId = 'LeanADB'
 $script:ActiveOutputFolder = ''
-$script:ProductVersion = '1.0.1'
+$script:SelectedDeviceSerial = ''
+$script:PinDeviceSelection = $false
+$script:MenuInstallRoot = ''
+$script:MenuState = $null
+$script:LastBatch = $null
+$script:AnyBatchFailure = $false
+$script:LastSavedPath = ''
+$script:StateRecoveredFromBackup = $false
+$script:ProductVersion = '1.1.0'
 $versionFile = Join-Path $PSScriptRoot 'VERSION'
 if (Test-Path -LiteralPath $versionFile -PathType Leaf) {
     $versionText = (Get-Content -LiteralPath $versionFile -Raw -Encoding UTF8).Trim()
@@ -80,7 +89,7 @@ $script:Messages = @{
     AdbFolder = 'ADB and Fastboot folder:'
     StartMenu = 'Start Menu: LeanADB'
     PortableInstallHint = 'Portable installation: use the launchers in this folder; PATH and Start Menu were not changed.'
-    DownloadsHint = 'The terminal starts in the selected file folder. Press T, then O in the easy menu to change it.'
+    DownloadsHint = 'The terminal starts in the selected file folder. Choose 6 (Settings), then 3 (Save location) in the easy menu to change it.'
     OpeningFolder = 'Opening the ADB and Fastboot folder now...'
     CloseKey = 'Press Enter to open LeanADB, or Esc to close.'
     AlreadyInstalled = 'LeanADB {0} is already installed. Checking for updates...'
@@ -93,7 +102,7 @@ $script:Messages = @{
     UninstalledDeferred = 'Uninstalled LeanADB. Installation files will be removed momentarily.'
     MenuTitle = 'LEANADB EASY MENU'
     MenuVersion = 'LeanADB {0} / Google Platform-Tools {1}'
-    MenuAdbDevices = '[ 1 ] Check ADB devices'
+    MenuAdbDevices = '[ 1 ] Connect or check a device'
     MenuFastbootDevices = '[ 2 ] Check Fastboot devices'
     MenuInstallApk = '[ 3 ] Select and install an APK'
     MenuPushFile = '[ 4 ] Send one or more files to device Downloads'
@@ -132,7 +141,7 @@ $script:Messages = @{
     ChooseDeviceHelp = 'Press a device number. Press Esc to cancel.'
     NoReadyDevice = 'No authorized ADB device is ready. Check USB debugging and device authorization.'
     UpdateCheckRunning = 'Checking for Platform-Tools updates in the background...'
-    UpdateReady = 'A Platform-Tools update is available. Press 6 to install it.'
+    UpdateReady = 'An update is available. Choose 6 (Settings) > 1 (Update) to install it.'
     UninstallTitle = 'REMOVE LEANADB?'
     UninstallConfirm = '[ ENTER ]  REMOVE LEANADB'
     UninstallKeep = '[  ESC  ]  CANCEL AND KEEP LEANADB'
@@ -158,7 +167,7 @@ $script:Messages = @{
     InvalidPairCode = 'Enter the six-digit pairing code shown on the device.'
     DeviceStatus = '{0}  {1}  {2}'
     ExistingLocation = 'Existing LeanADB installation found. Reusing: {0}'
-    ProductUpdateReady = 'LeanADB {0} is available. Press 6 to update LeanADB and Platform-Tools.'
+    ProductUpdateReady = 'LeanADB {0} is available. Choose 6 (Settings) > 1 (Update) to install it.'
     ProductUpdating = 'Updating LeanADB to {0}...'
     ProductUpdated = 'LeanADB was updated to {0}.'
     ProductUpToDate = 'LeanADB is already up to date: {0}'
@@ -178,6 +187,25 @@ $script:Messages = @{
     TerminalTry = 'Try: adb devices'
     InstallFailed = 'LeanADB installation failed. Review the error shown above.'
     SeeErrorLog = 'Error log: {0}'
+    RepairRecoveredBackup = 'Recovered LeanADB settings from the last valid state backup.'
+    RepairRebuiltState = 'Rebuilt LeanADB state from the verified installed Platform-Tools.'
+    RepairCompleted = 'LeanADB repair completed. Settings and launchers were refreshed.'
+    RepairMenuHint = 'Choose 6 (Settings) > 2 (Repair), or run Repair LeanADB.cmd if settings cannot be read.'
+    MenuRepair = '[ Y ] Repair LeanADB installation'
+    MenuChooseDevice = '[ C ] Choose target device'
+    MenuNameDevice = '[ A ] Name the selected device'
+    MenuTargetNone = 'Target device: not selected'
+    MenuTargetSelected = 'Target device: {0} ({1})'
+    MenuTargetUnavailable = 'Target device: {0} (disconnected or unavailable)'
+    MenuRecentDevice = 'Recent device: {0} (press C to select it)'
+    SelectedDeviceUnavailable = 'The selected device {0} is unavailable for this action. Press C in the main menu to choose a device.'
+    SelectedDeviceWrongState = 'The selected device {0} is {1}, which this action cannot use. Check the device mode or press C to choose another.'
+    DeviceAliasPrompt = 'Name for {0} (up to 32 characters; blank removes the name)'
+    DeviceAliasSaved = 'Device name saved: {0}'
+    DeviceAliasRemoved = 'Device name removed.'
+    DeviceAliasInvalid = 'Use up to 32 characters without control characters.'
+    DeviceAliasNoTarget = 'Choose an ADB target with C first.'
+    DevicePreferenceSaveFailed = 'Could not save the recent device: {0}'
     UnsupportedWindows = 'LeanADB supports 64-bit Windows 10 and Windows 11.'
     UnsupportedPowerShell = 'LeanADB requires Windows PowerShell 5.1 or newer.'
     StatusDevice = 'Connected'
@@ -252,6 +280,14 @@ $script:Messages = @{
     DiagnoseNoFastboot = 'No Fastboot device is visible. Fastboot requires bootloader mode and the correct USB driver.'
     DiagnosePathConflict = 'Another ADB may run in a regular terminal: {0}'
     DiagnoseUsbBackend = 'Windows ADB USB backend: {0}'
+    ConnectionGuideTitle = 'CONNECT A DEVICE'
+    ConnectionGuideRefresh = '[ R ] Refresh connections'
+    ConnectionGuideChoose = '[ C ] Choose an ADB target'
+    ConnectionGuideDiagnose = '[ X ] Full connection diagnosis'
+    ConnectionGuideHelp = '[ H ] USB and driver help'
+    ConnectionGuideBack = '[ ESC ] Back to main menu'
+    ConnectionGuideMultiple = 'Multiple ADB devices are visible. Press C to choose the target.'
+    ConnectionGuideFastbootOnly = 'A device is in Fastboot mode. Use the Fastboot actions, or reboot it to Android for ADB.'
     BrowseTitle = 'BROWSE DEVICE FILES'
     BrowseDownload = '[ D ] Download'
     BrowseDcim = '[ C ] Camera photos (DCIM)'
@@ -282,7 +318,7 @@ $script:Messages = @{
     DropInstallAndSend = '[ I ] Install APKs and send the other files'
     DropCancel = '[ ESC ] Cancel'
     DropNoFiles = 'Drop one or more existing files onto Drop files on LeanADB.cmd.'
-    DropSplitHint = 'For split APKs belonging to one app, use menu option 3 instead.'
+    DropSplitHint = 'For split APKs belonging to one app, choose Apps > Install APK > One split-APK set.'
     OfflineZipChoose = 'Choose the official Google Platform-Tools Windows ZIP'
     OfflineZipConfirm = 'Press Enter to install this local ZIP: {0}. Press Esc to cancel.'
     OfflineZipInvalid = 'Select an existing .zip file. Only a package with valid Google-signed ADB and Fastboot is accepted.'
@@ -297,6 +333,69 @@ $script:Messages = @{
     ScreenrecordRunning = 'Recording for {0} seconds. Keep the device connected...'
     ScreenrecordSaved = 'Screen recording saved: {0}'
     ScreenrecordFailed = 'Screen recording failed; no video was saved.'
+    HomeConnect = 'Connect / check a device'
+    HomeApps = 'Install apps'
+    HomeFiles = 'Send / receive / capture files'
+    HomeDevice = 'Device tools'
+    HomeTerminal = 'Advanced terminal'
+    HomeSettings = 'Settings / updates / repair'
+    HomeSaved = 'Open saved files'
+    HomeShortcuts = 'C: choose device   A: name device   Q / Esc: exit'
+    MenuBackHint = 'Choose a number. Esc: back'
+    ActionInstall = 'Choose APK files'
+    ActionSend = 'Send files to the device'
+    ActionBrowse = 'Browse and receive device files'
+    ActionReceive = 'Receive a path manually'
+    ActionScreenshot = 'Save a screenshot'
+    ActionRecord = 'Record the screen'
+    ActionRecent = 'Open a recent saved file'
+    ActionInfo = 'Device information'
+    ActionReboot = 'Restart Android / bootloader'
+    ActionSideload = 'Install a recovery update ZIP'
+    ActionWireless = 'Wireless connection'
+    ActionLogcat = 'Save device logs'
+    ActionBugreport = 'Save a bug report'
+    ActionFastboot = 'Check Fastboot devices'
+    ActionUpdate = 'Check and install updates'
+    ActionRepair = 'Repair LeanADB'
+    ActionOutput = 'Choose where files are saved'
+    ActionLanguage = 'Display language'
+    ActionInstallFolder = 'Open the installation folder'
+    ActionDiagnose = 'Connection diagnosis'
+    ActionDriver = 'USB driver help'
+    ActionOffline = 'Update from an official Google ZIP'
+    ApkModeTitle = 'You selected {0} APK files. How should they be installed?'
+    ApkModeIndependent = '[ 1 ] Separate apps: install each APK individually'
+    ApkModeSplit = '[ 2 ] One app: install all files as a split-APK set'
+    ApkModeHint = 'Choose 2 only when all APKs belong to the same app and version. Esc: cancel.'
+    MenuRetry = '[ R ] Retry failed items from the last batch'
+    NoFailedBatch = 'There are no failed batch items to retry in this session.'
+    RetryWrongDevice = 'Choose the original device before retrying. No files were sent to another device.'
+    RetryConfirm = 'Press Enter to retry {0} items on {1}, or Esc to cancel.'
+    ResultSaved = 'Operation results saved: {0}'
+    OperationProgress = 'Working... {0}s elapsed. Esc: stop this command.'
+    OperationCancelled = 'The PC command was stopped. Check the device: its operation may still be finishing.'
+    OperationTimedOut = 'The command exceeded its time limit. Check the connection and retry.'
+    ApkSignatureAdvice = 'The existing app has a different signature. Use a matching APK; removing the existing app can erase its data.'
+    StorageAdvice = 'Free some storage on the device, then retry.'
+    ApkAbiAdvice = 'Choose an APK that supports this device CPU architecture.'
+    ApkDowngradeAdvice = 'The installed app is newer. Choose the same or a newer version.'
+    ApkSplitAdvice = 'This APK set is incomplete or invalid. Choose the base APK and matching splits from the same app/version.'
+    PermissionAdvice = 'This device denied access. Choose a shared-storage folder or check the device permissions.'
+    CommandRetryAdvice = 'Check the device connection and the error above, then retry. Connection diagnosis is available in Settings.'
+    ActionError = 'This action could not finish: {0}'
+    ProductCheckFailed = 'LeanADB update check failed. Google tools can still be updated. {0}'
+    ToolsCheckFailed = 'Google tools update check failed. Installed tools remain usable. {0}'
+    CheckFailedHint = 'The last update check failed. Open Settings > Updates to retry.'
+    RemovalPending = 'Uninstall is finishing. Wait for the installation folder to disappear before reinstalling.'
+    DevicePage = 'Devices: page {0} of {1}. N: next / P: previous / Esc: cancel'
+    FastbootTargetConfirm = 'Fastboot target {0} differs from ADB target {1}. Press Enter to use it, or Esc to cancel.'
+    WirelessUsbConfirm = 'Press Enter to return {0} to USB mode, or Esc to cancel.'
+    WirelessDiscovery = '[ M ] Find wireless-debugging services on this network'
+    WirelessSuggestedIp = 'Detected Wi-Fi address: {0}. Enter: use it, or type another address'
+    WirelessSelected = 'Wireless target selected: {0}'
+    RecentEmpty = 'There are no LeanADB saved files in this folder yet.'
+    RestartMenuHint = 'If LeanADB itself was updated, reopen it to load the new menu.'
 }
 $script:EnglishMessages = $script:Messages.Clone()
 function Set-DisplayLanguage {
@@ -439,23 +538,101 @@ function Get-StatePath {
     return Join-Path $Root 'state.json'
 }
 
+function Get-StateBackupPath {
+    param([string]$Root)
+    return Join-Path $Root 'state.json.bak'
+}
+
+function Read-StateFile {
+    param([string]$Path)
+    $state = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($state.ProductId -ne $script:ProductId) {
+        throw 'The state file does not belong to LeanADB.'
+    }
+    if (-not $state.InstalledVersion -or [string]$state.InstalledVersion -notmatch '^\d+\.\d+(?:\.\d+){0,2}$') {
+        throw 'The state file has no installed Platform-Tools version.'
+    }
+    if ($null -ne $state.PSObject.Properties['StateSchemaVersion'] -and
+        ([int]$state.StateSchemaVersion -gt 2 -or [int]$state.StateSchemaVersion -lt 1)) { throw 'Unsupported LeanADB settings version.' }
+    $defaults = @{
+        PathRegistered = $false; ShortcutRegistered = $false; UninstallRegistered = $false
+        ProductSigned = $false; ProductUpdateAvailable = $false; UpdateAvailable = $false
+        LastCheckUtc = ''; LastCheckStatus = 'Recovered'; InstalledAtUtc = ''; UpdatedAtUtc = ''
+        ETag = ''; LastModified = ''; ContentLength = ''; ZipSha256 = ''
+        OutputFolder = ''; LanguagePreference = 'Auto'; UsbBackend = 'Standard'; LeanADBVersion = $script:ProductVersion
+        DeviceAliases = @(); RecentDevices = @(); LayoutVersion = 1
+    }
+    foreach ($name in $defaults.Keys) {
+        if ($null -eq $state.PSObject.Properties[$name]) { $state | Add-Member -NotePropertyName $name -NotePropertyValue $defaults[$name] }
+    }
+    foreach ($name in @('PathRegistered','ShortcutRegistered','UninstallRegistered','ProductSigned','ProductUpdateAvailable','UpdateAvailable')) {
+        if ($state.$name -isnot [bool]) { throw "Invalid Boolean setting: $name" }
+    }
+    if ($state.LanguagePreference -notin @('Auto','English','Korean') -or $state.UsbBackend -notin @('Standard','Legacy')) { throw 'Invalid language or USB setting.' }
+    if ($state.OutputFolder -and (-not [IO.Path]::IsPathRooted([string]$state.OutputFolder) -or [string]$state.OutputFolder -match '[\x00-\x1F]')) { throw 'Invalid saved-files location.' }
+    $aliases = @()
+    foreach ($entry in @($state.DeviceAliases)) {
+        if ($null -eq $entry) { continue }
+        if ($null -eq $entry.PSObject.Properties['Serial'] -or $null -eq $entry.PSObject.Properties['Alias'] -or
+            -not [string]$entry.Serial -or [string]$entry.Serial -match '[\p{C}]' -or
+            ([string]$entry.Alias).Length -gt 32 -or [string]$entry.Alias -match '[\p{C}]') { throw 'Invalid device name setting.' }
+        $aliases += [pscustomobject]@{ Serial = [string]$entry.Serial; Alias = [string]$entry.Alias }
+    }
+    $recent = @()
+    foreach ($serial in @($state.RecentDevices)) {
+        if ($null -eq $serial) { continue }
+        if ($serial -isnot [string] -or $serial -match '[\p{C}]') { throw 'Invalid recent-device setting.' }
+        if ($serial -and -not @($recent | Where-Object { $_ -ceq $serial }).Count -and $recent.Count -lt 5) { $recent += $serial }
+    }
+    $state | Add-Member -NotePropertyName DeviceAliases -NotePropertyValue $aliases -Force
+    $state | Add-Member -NotePropertyName RecentDevices -NotePropertyValue $recent -Force
+    if ($null -eq $state.PSObject.Properties['PackageComparisonKnown']) {
+        $state | Add-Member -NotePropertyName PackageComparisonKnown -NotePropertyValue ([bool](($state.ETag -or $state.LastModified) -and $state.LastCheckStatus -ne 'Offline'))
+    }
+    if ($state.PackageComparisonKnown -isnot [bool]) { throw 'Invalid package comparison setting.' }
+    $state | Add-Member -NotePropertyName StateSchemaVersion -NotePropertyValue 2 -Force
+    return $state
+}
+
 function Read-State {
     param([string]$Root)
     $path = Get-StatePath -Root $Root
-    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+    $backupPath = Get-StateBackupPath -Root $Root
+    $script:StateRecoveredFromBackup = $false
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf) -and
+        -not (Test-Path -LiteralPath $backupPath -PathType Leaf)) {
         return $null
     }
 
+    $primaryError = $null
     try {
-        $state = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
-        if ($state.ProductId -ne $script:ProductId) {
-            throw 'The state file does not belong to LeanADB.'
+        if (Test-Path -LiteralPath $path -PathType Leaf) {
+            return Read-StateFile -Path $path
         }
-        return $state
     }
     catch {
-        throw "Cannot read LeanADB state: $($_.Exception.Message)"
+        $primaryError = $_.Exception.Message
     }
+
+    if (Test-Path -LiteralPath $backupPath -PathType Leaf) {
+        try {
+            $state = Read-StateFile -Path $backupPath
+            $script:StateRecoveredFromBackup = $true
+            return $state
+        }
+        catch {
+            $backupError = $_.Exception.Message
+            if ($primaryError) {
+                throw "Cannot read LeanADB state or backup. Primary: $primaryError Backup: $backupError"
+            }
+            throw "Cannot read LeanADB state backup: $backupError"
+        }
+    }
+
+    if ($primaryError) {
+        throw "Cannot read LeanADB state: $primaryError"
+    }
+    return $null
 }
 
 function Write-State {
@@ -467,9 +644,21 @@ function Write-State {
         New-Item -ItemType Directory -Path $Root | Out-Null
     }
     $path = Get-StatePath -Root $Root
+    $backupPath = Get-StateBackupPath -Root $Root
     $tempPath = "$path.tmp"
-    $State | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $tempPath -Encoding UTF8
-    Move-Item -LiteralPath $tempPath -Destination $path -Force
+    $backupTempPath = "$backupPath.tmp"
+    try {
+        $State | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $tempPath -Encoding UTF8
+        [void](Read-StateFile -Path $tempPath)
+        Move-Item -LiteralPath $tempPath -Destination $path -Force
+        Copy-Item -LiteralPath $path -Destination $backupTempPath -Force
+        [void](Read-StateFile -Path $backupTempPath)
+        Move-Item -LiteralPath $backupTempPath -Destination $backupPath -Force
+    }
+    finally {
+        if (Test-Path -LiteralPath $tempPath -PathType Leaf) { Remove-Item -LiteralPath $tempPath -Force }
+        if (Test-Path -LiteralPath $backupTempPath -PathType Leaf) { Remove-Item -LiteralPath $backupTempPath -Force }
+    }
 }
 
 function Get-HeaderText {
@@ -522,6 +711,13 @@ function Get-ProductManifest {
         -not $manifest.Package.FileName -or -not $manifest.Package.Sha256 -or
         -not $manifest.Files) {
         throw $script:Messages.InvalidManifest
+    }
+    if (($null -ne $manifest.PSObject.Properties['SchemaVersion'] -and $manifest.SchemaVersion -ne 1) -or
+        [string]$manifest.Package.Sha256 -notmatch '^[0-9A-Fa-f]{64}$') { throw $script:Messages.InvalidManifest }
+    [void](Convert-SemVerParts -Version ([string]$manifest.Version))
+    foreach ($entry in @($manifest.Files)) {
+        if ($null -eq $entry -or $null -eq $entry.PSObject.Properties['Path'] -or $null -eq $entry.PSObject.Properties['Sha256'] -or
+            [string]$entry.Sha256 -notmatch '^[0-9A-Fa-f]{64}$') { throw $script:Messages.InvalidManifest }
     }
     return $manifest
 }
@@ -606,6 +802,94 @@ function Save-UriToFile {
     }
 }
 
+function New-InstallSnapshot {
+    param([string]$Root, [string]$BackupRoot, [switch]$Integration)
+    $paths = @('LeanADB.ps1','VERSION','UPDATE_URL','locales\ko.json','state.json','state.json.bak',
+        'README.md','CHANGELOG.md','LICENSE','Open LeanADB.cmd','Open LeanADB Terminal.cmd',
+        'Update LeanADB.cmd','Repair LeanADB.cmd','Uninstall LeanADB.cmd','Drop files on LeanADB.cmd','LeanADB-Drop.ps1','Open LeanADB Here.cmd')
+    $files = @()
+    foreach ($relative in $paths) {
+        $target = Join-Path $Root $relative
+        $exists = Test-Path -LiteralPath $target -PathType Leaf
+        $backup = Join-Path $BackupRoot $relative
+        if ($exists) {
+            New-Item -ItemType Directory -Path (Split-Path -Parent $backup) -Force | Out-Null
+            Copy-Item -LiteralPath $target -Destination $backup -Force
+        }
+        $files += [pscustomobject]@{ Path = $relative; Exists = $exists; Backup = $backup }
+    }
+    $snapshot = [pscustomobject]@{ Files = $files; Integration = [bool]$Integration; UserPath = ''; ShortcutBytes = $null; Registry = @(); HadRegistry = $false }
+    if ($Integration) {
+        $snapshot.UserPath = [Environment]::GetEnvironmentVariable('Path','User')
+        $shortcut = Get-ShortcutPath
+        if (Test-Path -LiteralPath $shortcut -PathType Leaf) { $snapshot.ShortcutBytes = [IO.File]::ReadAllBytes($shortcut) }
+        $keyPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\LeanADB'
+        if (Test-Path -LiteralPath $keyPath) {
+            $snapshot.HadRegistry = $true
+            $key = Get-Item -LiteralPath $keyPath
+            foreach ($name in $key.GetValueNames()) { $snapshot.Registry += [pscustomobject]@{ Name = $name; Value = $key.GetValue($name); Kind = $key.GetValueKind($name).ToString() } }
+        }
+    }
+    return $snapshot
+}
+
+function Restore-InstallSnapshot {
+    param([string]$Root, [object]$Snapshot)
+    $failures = @()
+    foreach ($entry in $Snapshot.Files) {
+        try {
+            $target = Join-Path $Root $entry.Path
+            if ($entry.Exists) {
+                New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
+                Copy-Item -LiteralPath $entry.Backup -Destination $target -Force
+            }
+            elseif (Test-Path -LiteralPath $target -PathType Leaf) { Remove-Item -LiteralPath $target -Force }
+        }
+        catch { $failures += $_.Exception.Message }
+    }
+    if ($Snapshot.Integration) {
+        try {
+            if ([Environment]::GetEnvironmentVariable('Path','User') -ne $Snapshot.UserPath) { [Environment]::SetEnvironmentVariable('Path',$Snapshot.UserPath,'User') }
+            $shortcut = Get-ShortcutPath
+            if ($null -ne $Snapshot.ShortcutBytes) {
+                New-Item -ItemType Directory -Path (Split-Path -Parent $shortcut) -Force | Out-Null
+                [IO.File]::WriteAllBytes($shortcut, $Snapshot.ShortcutBytes)
+            }
+            elseif (Test-Path -LiteralPath $shortcut -PathType Leaf) { Set-StartMenuShortcut -Root $Root -Present $false }
+            $keyPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\LeanADB'
+            if ($Snapshot.HadRegistry) {
+                New-Item -Path $keyPath -Force | Out-Null
+                foreach ($entry in $Snapshot.Registry) { New-ItemProperty -Path $keyPath -Name $entry.Name -Value $entry.Value -PropertyType $entry.Kind -Force | Out-Null }
+            }
+            else { Set-UninstallRegistration -Root $Root -Present $false }
+        }
+        catch { $failures += $_.Exception.Message }
+    }
+    if ($failures.Count) { throw ('Rollback incomplete: ' + ($failures -join '; ')) }
+}
+
+function Assert-ProductArchive {
+    param([string]$ZipPath)
+    if ((Get-Item -LiteralPath $ZipPath).Length -gt 16MB) { throw 'LeanADB update archive exceeds 16 MB.' }
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $zip = [IO.Compression.ZipFile]::OpenRead($ZipPath)
+    try {
+        if ($zip.Entries.Count -gt 64) { throw 'Too many LeanADB update entries.' }
+        $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+        [long]$size = 0
+        foreach ($entry in $zip.Entries) {
+            # Windows PowerShell's Compress-Archive uses backslashes. Validate
+            # canonical separators before checking traversal and duplicates.
+            $name = ([string]$entry.FullName).Replace('\','/')
+            if ($name -notmatch '^LeanADB/' -or $name -match '[\x00-\x1F\x7F:]|(^|/)\.\.?(/|$)|[. ](/|$)' -or -not $seen.Add($name)) { throw "Unsafe LeanADB update entry: $name" }
+            $size += $entry.Length
+            if ($size -gt 32MB) { throw 'LeanADB update expands beyond 32 MB.' }
+        }
+        Assert-FreeDiskSpace -Path (Split-Path -Parent $ZipPath) -RequiredBytes ($size + 16MB)
+    }
+    finally { $zip.Dispose() }
+}
+
 function Install-ProductUpdate {
     param(
         [string]$Root,
@@ -617,6 +901,7 @@ function Install-ProductUpdate {
         'locales\ko.json'
     )
     $manifestPaths = @($Manifest.Files | ForEach-Object { ([string]$_.Path).Replace('/', '\') })
+    if (@($manifestPaths | Select-Object -Unique).Count -ne $manifestPaths.Count) { throw 'Duplicate LeanADB manifest paths.' }
     foreach ($required in @('LeanADB.ps1', 'VERSION', 'locales\ko.json')) {
         if ($required -notin $manifestPaths) {
             throw "$($script:Messages.InvalidManifest) Missing $required"
@@ -634,9 +919,22 @@ function Install-ProductUpdate {
     $workRoot = Join-Path ([IO.Path]::GetTempPath()) ('LeanADB-product-' + [guid]::NewGuid().ToString('N'))
     $applied = @()
     $statePath = Get-StatePath -Root $Root
-    $originalStateText = Get-Content -LiteralPath $statePath -Raw -Encoding UTF8
+    $stateBackupPath = Get-StateBackupPath -Root $Root
+    $originalStateBytes = $null
+    $originalBackupBytes = $null
+    $stateSnapshotCaptured = $false
+    $snapshot = $null
+    $preserveBackup = $false
+    $committed = $false
     try {
+        $originalStateBytes = if (Test-Path -LiteralPath $statePath -PathType Leaf) { [IO.File]::ReadAllBytes($statePath) } else { $null }
+        $originalBackupBytes = if (Test-Path -LiteralPath $stateBackupPath -PathType Leaf) { [IO.File]::ReadAllBytes($stateBackupPath) } else { $null }
+        $stateSnapshotCaptured = $true
         New-Item -ItemType Directory -Path $workRoot | Out-Null
+        $installedState = Read-State -Root $Root
+        if ($null -eq $installedState) { throw (Format-Message -Name 'NotInstalled' -Values @($Root)) }
+        if ($null -ne $installedState.PSObject.Properties['PendingRemovalId'] -and $installedState.PendingRemovalId) { throw $script:Messages.RemovalPending }
+        $snapshot = New-InstallSnapshot -Root $Root -BackupRoot (Join-Path $workRoot 'snapshot') -Integration:([bool]$installedState.PathRegistered -or [bool]$installedState.ShortcutRegistered)
         $archive = Join-Path $workRoot 'LeanADB.zip'
         Save-UriToFile -Uri (Resolve-ProductPackageUri -ManifestUrl $ManifestUrl -Manifest $Manifest) -Destination $archive
         $archiveHash = Get-Sha256Hash -FilePath $archive
@@ -644,8 +942,10 @@ function Install-ProductUpdate {
             throw 'LeanADB update package SHA-256 mismatch.'
         }
         $extractRoot = Join-Path $workRoot 'extract'
+        Assert-ProductArchive -ZipPath $archive
         Expand-Archive -LiteralPath $archive -DestinationPath $extractRoot -Force
         $packageRoot = Join-Path $extractRoot 'LeanADB'
+        if ((Get-Content -LiteralPath (Join-Path $packageRoot 'VERSION') -Raw -Encoding UTF8).Trim() -cne [string]$Manifest.Version) { throw 'LeanADB package version does not match its manifest.' }
         $installedState = Read-State -Root $Root
         $requireSignedUpdate = $null -ne $installedState.PSObject.Properties['ProductSigned'] -and [bool]$installedState.ProductSigned
         if ($requireSignedUpdate) {
@@ -664,6 +964,11 @@ function Install-ProductUpdate {
         }
         $backupRoot = Join-Path $workRoot 'backup'
         New-Item -ItemType Directory -Path $backupRoot | Out-Null
+        foreach ($entry in $Manifest.Files) {
+            $relative = ([string]$entry.Path).Replace('/', '\')
+            $source = Join-Path $packageRoot $relative
+            if (-not (Test-Path -LiteralPath $source -PathType Leaf) -or (Get-Sha256Hash -FilePath $source) -ine [string]$entry.Sha256) { throw "LeanADB update file verification failed: $relative" }
+        }
 
         foreach ($entry in $Manifest.Files) {
             $relative = ([string]$entry.Path).Replace('/', '\')
@@ -703,8 +1008,15 @@ function Install-ProductUpdate {
         if ([bool]$state.PathRegistered -or [bool]$state.ShortcutRegistered) {
             Set-UninstallRegistration -Root $Root -Present $true -DisplayVersion ([string]$Manifest.Version)
         }
+        $committed = $true
     }
     catch {
+        $originalError = $_
+        if ($null -ne $snapshot) {
+            try { Restore-InstallSnapshot -Root $Root -Snapshot $snapshot }
+            catch { $preserveBackup = $true; throw "Update failed: $($originalError.Exception.Message) $($_.Exception.Message) Backup: $workRoot" }
+            throw $originalError
+        }
         $rollbackPaths = @($applied)
         [array]::Reverse($rollbackPaths)
         foreach ($relative in $rollbackPaths) {
@@ -717,12 +1029,20 @@ function Install-ProductUpdate {
                 Remove-Item -LiteralPath $target -Force
             }
         }
-        Set-Content -LiteralPath $statePath -Value $originalStateText -Encoding UTF8
+        if ($stateSnapshotCaptured) {
+            if ($null -ne $originalStateBytes) { [IO.File]::WriteAllBytes($statePath, $originalStateBytes) }
+            elseif (Test-Path -LiteralPath $statePath -PathType Leaf) { Remove-Item -LiteralPath $statePath -Force }
+            if ($null -ne $originalBackupBytes) { [IO.File]::WriteAllBytes($stateBackupPath, $originalBackupBytes) }
+            elseif (Test-Path -LiteralPath $stateBackupPath -PathType Leaf) { Remove-Item -LiteralPath $stateBackupPath -Force }
+        }
         throw
     }
     finally {
         try {
-            if (Test-Path -LiteralPath $workRoot) { Remove-Item -LiteralPath $workRoot -Recurse -Force }
+            if (-not $preserveBackup -and (Test-Path -LiteralPath $workRoot)) {
+                try { Remove-Item -LiteralPath $workRoot -Recurse -Force }
+                catch { if (-not $committed) { throw }; Write-Warning "Update succeeded; temporary files remain at $workRoot" }
+            }
         }
         finally {
             Exit-UpdateLock -Mutex $mutex
@@ -896,17 +1216,13 @@ function Find-KnownInstallation {
         (Join-Path ([Environment]::GetFolderPath('Desktop')) 'LeanADB')
     ) | Select-Object -Unique
     foreach ($root in $roots) {
-        $statePath = Join-Path $root 'state.json'
-        if (Test-Path -LiteralPath $statePath -PathType Leaf) {
-            try {
-                $candidate = Get-Content -LiteralPath $statePath -Raw -Encoding UTF8 | ConvertFrom-Json
-                if ($candidate.ProductId -eq $script:ProductId) {
-                    return [System.IO.Path]::GetFullPath($root).TrimEnd('\')
-                }
+        try {
+            if ($null -ne (Read-State -Root $root)) {
+                return [System.IO.Path]::GetFullPath($root).TrimEnd('\')
             }
-            catch {
-                # A damaged candidate is handled if the user explicitly selects that folder.
-            }
+        }
+        catch {
+            # A damaged candidate is handled if the user explicitly selects that folder.
         }
     }
     return $null
@@ -940,7 +1256,7 @@ function Show-InstallCompletion {
     Write-Host $script:Messages.DownloadsHint
     Write-Host ''
     Write-Host $script:Messages.OpeningFolder -ForegroundColor Green
-    Start-Process -FilePath 'explorer.exe' -ArgumentList @($binPath)
+    Start-Process -FilePath 'explorer.exe' -ArgumentList @('"' + $binPath + '"')
     Write-Host ''
     Write-Host $script:Messages.CloseKey
     while ($true) {
@@ -991,54 +1307,156 @@ function Select-LocalFile {
     }
 }
 
+function ConvertTo-NativeArgument {
+    param([string]$Value)
+    $escaped = [regex]::Replace($Value, '(\\*)"', { param($match) $match.Groups[1].Value + $match.Groups[1].Value + '\"' })
+    $escaped = [regex]::Replace($escaped, '(\\+)$', '$1$1')
+    return '"' + $escaped + '"'
+}
+
+function Invoke-ToolProcess {
+    param([string]$Executable, [string[]]$Arguments, [int]$TimeoutSeconds = 300, [string]$OutputFile = '', [switch]$QuietProgress)
+    $command = Get-Command $Executable -ErrorAction Stop
+    if ($command.CommandType -eq 'Function') {
+        $previous = $ErrorActionPreference
+        try { $ErrorActionPreference = 'Continue'; $output = @(& $Executable @Arguments 2>&1); $code = $LASTEXITCODE }
+        finally { $ErrorActionPreference = $previous }
+        return [pscustomobject]@{ ExitCode = $code; Output = ($output | Out-String).Trim(); Cancelled = $false; TimedOut = $false }
+    }
+    $info = New-Object Diagnostics.ProcessStartInfo
+    $info.FileName = $command.Source
+    $info.Arguments = (@($Arguments | ForEach-Object { ConvertTo-NativeArgument -Value $_ }) -join ' ')
+    $info.UseShellExecute = $false; $info.CreateNoWindow = $true
+    $info.RedirectStandardOutput = $true; $info.RedirectStandardError = $true
+    $info.StandardOutputEncoding = [Text.UTF8Encoding]::new($false)
+    $info.StandardErrorEncoding = [Text.UTF8Encoding]::new($false)
+    $process = New-Object Diagnostics.Process
+    $process.StartInfo = $info
+    $stream = $null; $cancelled = $false; $timedOut = $false
+    $watch = [Diagnostics.Stopwatch]::StartNew()
+    $shown = -1
+    $interactive = [Environment]::UserInteractive -and -not [Console]::IsInputRedirected
+    try {
+        if ($OutputFile) { $stream = [IO.File]::Open($OutputFile, [IO.FileMode]::Create, [IO.FileAccess]::Write, [IO.FileShare]::Read) }
+        [void]$process.Start()
+        $stdout = if ($null -ne $stream) { $process.StandardOutput.BaseStream.CopyToAsync($stream) } else { $process.StandardOutput.ReadToEndAsync() }
+        $stderr = $process.StandardError.ReadToEndAsync()
+        while (-not $process.WaitForExit(100)) {
+            if ($watch.Elapsed.TotalSeconds -ge $TimeoutSeconds) { $timedOut = $true; break }
+            if ($interactive -and [Console]::KeyAvailable) {
+                if ([Console]::ReadKey($true).Key -eq [ConsoleKey]::Escape) { $cancelled = $true; break }
+            }
+            $elapsed = [int]$watch.Elapsed.TotalSeconds
+            if ($interactive -and -not $QuietProgress -and $elapsed -gt $shown) {
+                Write-Host ("`r" + (Format-Message -Name 'OperationProgress' -Values @($elapsed))) -NoNewline -ForegroundColor DarkGray
+                $shown = $elapsed
+            }
+        }
+        if ($cancelled -or $timedOut) { $process.Kill(); [void]$process.WaitForExit(5000) }
+        # A descendant can keep inherited pipe handles open after the client
+        # exits. Bound stream draining too, not just the client process itself.
+        $drainWatch = [Diagnostics.Stopwatch]::StartNew()
+        while ((-not $stdout.IsCompleted -or -not $stderr.IsCompleted) -and $drainWatch.Elapsed.TotalSeconds -lt 2) { [Threading.Thread]::Sleep(25) }
+        $drainWatch.Stop()
+        if (-not $stdout.IsCompleted -or -not $stderr.IsCompleted) {
+            $timedOut = $true
+            $process.StandardOutput.Close(); $process.StandardError.Close()
+            $global:LASTEXITCODE = if ($cancelled) { 130 } else { 124 }
+            return [pscustomobject]@{ ExitCode = $global:LASTEXITCODE; Output = ''; Cancelled = $cancelled; TimedOut = $timedOut }
+        }
+        $stdout.GetAwaiter().GetResult() | Out-Null
+        $errorText = $stderr.GetAwaiter().GetResult()
+        $text = if ($null -ne $stream) { $errorText } else { ([string]$stdout.Result + [Environment]::NewLine + $errorText).Trim() }
+        $code = if ($cancelled) { 130 } elseif ($timedOut) { 124 } else { $process.ExitCode }
+        if ($code -eq 0 -and $Arguments.Count -gt 0 -and $Arguments[0] -in @('connect','pair') -and $text -match '(?im)(?:^|adb: )(?:failed|cannot|unable|error)|failed to connect') { $code = 1 }
+        $global:LASTEXITCODE = $code
+        return [pscustomobject]@{ ExitCode = $code; Output = $text; Cancelled = $cancelled; TimedOut = $timedOut }
+    }
+    finally {
+        if ($shown -ge 0) { Write-Host '' }
+        # Do not leave a client running after a stream or console error.
+        try { if ($process.Id -and -not $process.HasExited) { $process.Kill(); [void]$process.WaitForExit(5000) } } catch { }
+        if ($null -ne $stream) { $stream.Dispose() }
+        $process.Dispose(); $watch.Stop()
+    }
+}
+
+function Get-CommandAdvice {
+    param([string]$Output, [int]$ExitCode)
+    if ($ExitCode -eq 130) { return $script:Messages.OperationCancelled }
+    if ($ExitCode -eq 124) { return $script:Messages.OperationTimedOut }
+    switch -Regex ($Output) {
+        'INSTALL_FAILED_UPDATE_INCOMPATIBLE|INSTALL_FAILED_SHARED_USER_INCOMPATIBLE' { return $script:Messages.ApkSignatureAdvice }
+        'INSTALL_FAILED_INSUFFICIENT_STORAGE|No space left' { return $script:Messages.StorageAdvice }
+        'INSTALL_FAILED_NO_MATCHING_ABIS' { return $script:Messages.ApkAbiAdvice }
+        'INSTALL_FAILED_VERSION_DOWNGRADE' { return $script:Messages.ApkDowngradeAdvice }
+        'INSTALL_FAILED_MISSING_SPLIT|INSTALL_FAILED_INVALID_APK' { return $script:Messages.ApkSplitAdvice }
+        'unauthorized' { return $script:Messages.DiagnoseUnauthorized }
+        'offline|device .*not found|no devices' { return $script:Messages.DiagnoseOffline }
+        'Permission denied' { return $script:Messages.PermissionAdvice }
+        default { return $script:Messages.CommandRetryAdvice }
+    }
+}
+
+function Save-OperationReport {
+    param([string]$Kind, [string]$Serial, [object[]]$Results)
+    $folder = Get-ActiveOutputFolder
+    $path = Join-Path $folder ('LeanADB-Result-' + [DateTime]::Now.ToString('yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0,6) + '.txt')
+    [pscustomobject]@{ Operation = $Kind; Device = $Serial; TimeUtc = [DateTime]::UtcNow.ToString('o'); Results = @($Results) } |
+        ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $path -Encoding UTF8
+    $script:LastSavedPath = $path
+    Write-Host (Format-Message -Name 'ResultSaved' -Values @($path)) -ForegroundColor DarkGray
+    return $path
+}
+
 function Invoke-MenuCommand {
     param(
         [string]$Executable,
         [string[]]$Arguments
     )
     Write-Host ''
-    $previousPreference = $ErrorActionPreference
-    try {
-        $ErrorActionPreference = 'Continue'
-        & $Executable @Arguments
-        $commandExitCode = $LASTEXITCODE
-    }
-    finally {
-        $ErrorActionPreference = $previousPreference
-    }
+    $result = Invoke-ToolProcess -Executable $Executable -Arguments $Arguments
+    if ($result.Output) { Write-Host $result.Output }
+    $commandExitCode = $result.ExitCode
     Write-Host ''
     if ($commandExitCode -eq 0) {
         Write-Host $script:Messages.CommandSucceeded -ForegroundColor Green
     }
     else {
         Write-Host (Format-Message -Name 'CommandFailed' -Values @($commandExitCode)) -ForegroundColor Red
+        Write-Host (Get-CommandAdvice -Output $result.Output -ExitCode $commandExitCode) -ForegroundColor Yellow
     }
     Wait-ForMenuKey
+    return $result
 }
 
 function Send-FilesToDevice {
     param([string]$AdbPath, [string]$Serial, [string[]]$Paths)
     $success = 0
     $failed = 0
-    $previousPreference = $ErrorActionPreference
-    try {
-        $ErrorActionPreference = 'Continue'
+    $results = @(); $cancelled = $false
         for ($index = 0; $index -lt $Paths.Count; $index++) {
             $path = $Paths[$index]
-            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            if ($cancelled -or -not (Test-Path -LiteralPath $path -PathType Leaf)) {
                 Write-Host (Format-Message -Name 'BatchSkipped' -Values @($path)) -ForegroundColor Yellow
                 $failed++
+                $results += [pscustomobject]@{ Path = $path; Success = $false; ExitCode = 130; Details = 'Not attempted' }
                 continue
             }
             $remoteName = [DateTime]::Now.ToString('yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 6) + '-' + [IO.Path]::GetFileName($path)
             $remotePath = '/sdcard/Download/' + $remoteName
             Write-Host (Format-Message -Name 'SendBatchItem' -Values @(($index + 1), $Paths.Count, $path))
-            & $AdbPath -s $Serial push $path $remotePath
-            if ($LASTEXITCODE -eq 0) { $success++ } else { $failed++ }
+            $result = Invoke-ToolProcess -Executable $AdbPath -Arguments @('-s',$Serial,'push',$path,$remotePath)
+            if ($result.Output) { Write-Host $result.Output }
+            $ok = $result.ExitCode -eq 0
+            if ($ok) { $success++ } else { $failed++; Write-Host (Get-CommandAdvice -Output $result.Output -ExitCode $result.ExitCode) -ForegroundColor Yellow }
+            $results += [pscustomobject]@{ Path = $path; RemotePath = $remotePath; Success = $ok; ExitCode = $result.ExitCode; Details = $result.Output }
+            $cancelled = $result.Cancelled
         }
-    }
-    finally { $ErrorActionPreference = $previousPreference }
+    $script:LastBatch = [pscustomobject]@{ Kind = 'Send'; Serial = $Serial; Results = $results }
+    if ($failed) { $script:AnyBatchFailure = $true }
     Write-Host (Format-Message -Name 'SendBatchSummary' -Values @($success, $failed)) -ForegroundColor $(if ($failed) { 'Yellow' } else { 'Green' })
+    try { [void](Save-OperationReport -Kind 'Send' -Serial $Serial -Results $results) } catch { Write-Warning $_.Exception.Message }
     Wait-ForMenuKey
 }
 
@@ -1046,25 +1464,62 @@ function Install-ApkBatch {
     param([string]$AdbPath, [string]$Serial, [string[]]$Paths)
     $success = 0
     $failed = 0
-    $previousPreference = $ErrorActionPreference
-    try {
-        $ErrorActionPreference = 'Continue'
+    $results = @(); $cancelled = $false
         for ($index = 0; $index -lt $Paths.Count; $index++) {
             $path = $Paths[$index]
-            if (-not (Test-Path -LiteralPath $path -PathType Leaf) -or [IO.Path]::GetExtension($path) -ine '.apk') {
+            if ($cancelled -or -not (Test-Path -LiteralPath $path -PathType Leaf) -or [IO.Path]::GetExtension($path) -ine '.apk') {
                 Write-Host (Format-Message -Name 'BatchSkipped' -Values @($path)) -ForegroundColor Yellow
                 $failed++
+                $results += [pscustomobject]@{ Path = $path; Success = $false; ExitCode = 130; Details = 'Not attempted' }
                 continue
             }
             Write-Host (Format-Message -Name 'InstallBatchItem' -Values @(($index + 1), $Paths.Count, $path))
-            & $AdbPath -s $Serial install -r $path
-            if ($LASTEXITCODE -eq 0) { $success++ } else { $failed++ }
+            $result = Invoke-ToolProcess -Executable $AdbPath -Arguments @('-s',$Serial,'install','-r',$path) -TimeoutSeconds 180
+            if ($result.Output) { Write-Host $result.Output }
+            $ok = $result.ExitCode -eq 0
+            if ($ok) { $success++ } else { $failed++; Write-Host (Get-CommandAdvice -Output $result.Output -ExitCode $result.ExitCode) -ForegroundColor Yellow }
+            $results += [pscustomobject]@{ Path = $path; Success = $ok; ExitCode = $result.ExitCode; Details = $result.Output }
+            $cancelled = $result.Cancelled
         }
-    }
-    finally { $ErrorActionPreference = $previousPreference }
+    $script:LastBatch = [pscustomobject]@{ Kind = 'Install'; Serial = $Serial; Results = $results }
+    if ($failed) { $script:AnyBatchFailure = $true }
     Write-Host (Format-Message -Name 'InstallBatchSummary' -Values @($success, $failed)) -ForegroundColor $(if ($failed) { 'Yellow' } else { 'Green' })
     if ($Paths.Count -gt 1) { Write-Host $script:Messages.DropSplitHint -ForegroundColor DarkGray }
+    try { [void](Save-OperationReport -Kind 'Install' -Serial $Serial -Results $results) } catch { Write-Warning $_.Exception.Message }
     Wait-ForMenuKey
+}
+
+function Install-SplitApkBatch {
+    param([string]$AdbPath, [string]$Serial, [string[]]$Paths)
+    $sdk = Get-AdbSdkLevel -AdbPath $AdbPath -Serial $Serial
+    if ($sdk -gt 0 -and $sdk -lt 21) { Write-Host $script:Messages.SplitApkUnsupported -ForegroundColor Yellow; Wait-ForMenuKey; return }
+    foreach ($path in $Paths) {
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf) -or [IO.Path]::GetExtension($path) -ine '.apk') { throw $script:Messages.ApkSplitAdvice }
+    }
+    $result = Invoke-ToolProcess -Executable $AdbPath -Arguments (@('-s',$Serial,'install-multiple','-r') + $Paths) -TimeoutSeconds 180
+    if ($result.Output) { Write-Host $result.Output }
+    $ok = $result.ExitCode -eq 0
+    $results = @($Paths | ForEach-Object { [pscustomobject]@{ Path = $_; Success = $ok; ExitCode = $result.ExitCode; Details = $result.Output } })
+    $script:LastBatch = [pscustomobject]@{ Kind = 'Split'; Serial = $Serial; Results = $results }
+    if ($ok) { Write-Host $script:Messages.CommandSucceeded -ForegroundColor Green }
+    else { $script:AnyBatchFailure = $true; Write-Host (Get-CommandAdvice -Output $result.Output -ExitCode $result.ExitCode) -ForegroundColor Yellow }
+    try { [void](Save-OperationReport -Kind 'Split' -Serial $Serial -Results $results) } catch { Write-Warning $_.Exception.Message }
+    Wait-ForMenuKey
+}
+
+function Retry-LastBatch {
+    param([string]$AdbPath)
+    if ($null -eq $script:LastBatch) { Write-Host $script:Messages.NoFailedBatch; Wait-ForMenuKey; return }
+    $batch = $script:LastBatch
+    $failed = @($batch.Results | Where-Object { -not $_.Success } | ForEach-Object { $_.Path })
+    if (-not $failed.Count) { Write-Host $script:Messages.NoFailedBatch; Wait-ForMenuKey; return }
+    $serial = Select-AdbDevice -AdbPath $AdbPath
+    if (-not $serial) { return }
+    if ($serial -cne $batch.Serial) { Write-Host $script:Messages.RetryWrongDevice -ForegroundColor Yellow; Wait-ForMenuKey; return }
+    if (-not (Confirm-MenuAction -Prompt (Format-Message -Name 'RetryConfirm' -Values @($failed.Count,$serial)))) { return }
+    if ($batch.Kind -eq 'Send') { Send-FilesToDevice -AdbPath $AdbPath -Serial $serial -Paths $failed }
+    elseif ($batch.Kind -eq 'Split') { Install-SplitApkBatch -AdbPath $AdbPath -Serial $serial -Paths $failed }
+    else { Install-ApkBatch -AdbPath $AdbPath -Serial $serial -Paths $failed }
 }
 
 function Get-ReadyAdbDevices {
@@ -1075,15 +1530,9 @@ function Get-ReadyAdbDevices {
 
 function Get-AdbDeviceRecords {
     param([string]$AdbPath)
-    $previousPreference = $ErrorActionPreference
-    try {
-        $ErrorActionPreference = 'Continue'
-        $output = @(& $AdbPath devices -l 2>&1)
-        $deviceExitCode = $LASTEXITCODE
-    }
-    finally {
-        $ErrorActionPreference = $previousPreference
-    }
+    $result = Invoke-ToolProcess -Executable $AdbPath -Arguments @('devices','-l') -TimeoutSeconds 15 -QuietProgress
+    $output = @($result.Output -split '\r?\n')
+    $deviceExitCode = $result.ExitCode
     if ($deviceExitCode -ne 0) {
         return @()
     }
@@ -1119,16 +1568,118 @@ function Get-LocalizedDeviceStatus {
     }
 }
 
+function Get-DeviceAlias {
+    param([object]$State, [string]$Serial)
+    if ($null -eq $State -or $null -eq $State.PSObject.Properties['DeviceAliases']) { return '' }
+    foreach ($entry in @($State.DeviceAliases)) {
+        if ($null -ne $entry -and [string]$entry.Serial -ceq $Serial) {
+            $alias = [string]$entry.Alias
+            if ($alias.Length -le 32 -and $alias -notmatch '[\p{C}]') { return $alias }
+        }
+    }
+    return ''
+}
+
+function Get-DeviceDisplayName {
+    param([object]$State, [string]$Serial)
+    $alias = Get-DeviceAlias -State $State -Serial $Serial
+    if ($alias) { return ('{0} [{1}]' -f $alias, $Serial) }
+    return $Serial
+}
+
+function Set-SelectedAdbDevice {
+    param([string]$Serial)
+    $script:SelectedDeviceSerial = $Serial
+    if (-not $script:PinDeviceSelection -or -not $script:MenuInstallRoot) { return }
+    $selectionMutex = $null
+    try {
+        $selectionMutex = Enter-UpdateLock -Root $script:MenuInstallRoot
+        $state = Read-State -Root $script:MenuInstallRoot
+        if ($null -eq $state) { throw (Format-Message -Name 'NotInstalled' -Values @($script:MenuInstallRoot)) }
+        $recent = @($Serial)
+        if ($null -ne $state.PSObject.Properties['RecentDevices']) {
+            foreach ($previous in @($state.RecentDevices)) {
+                $previousSerial = [string]$previous
+                if (-not $previousSerial -or @($recent | Where-Object { $_ -ceq $previousSerial }).Count) { continue }
+                $recent += $previousSerial
+                if ($recent.Count -ge 5) { break }
+            }
+        }
+        $state | Add-Member -NotePropertyName RecentDevices -NotePropertyValue $recent -Force
+        Write-State -Root $script:MenuInstallRoot -State $state
+        $script:MenuState = $state
+    }
+    catch { Write-Warning (Format-Message -Name 'DevicePreferenceSaveFailed' -Values @($_.Exception.Message)) }
+    finally { if ($null -ne $selectionMutex) { Exit-UpdateLock -Mutex $selectionMutex } }
+}
+
+function Set-DeviceAlias {
+    param([string]$Root, [string]$Serial, [string]$Alias)
+    $normalizedAlias = $Alias.Trim()
+    if ($normalizedAlias.Length -gt 32 -or $normalizedAlias -match '[\p{C}]') { throw $script:Messages.DeviceAliasInvalid }
+    $aliasMutex = Enter-UpdateLock -Root $Root
+    try {
+        $state = Read-State -Root $Root
+        if ($null -eq $state) { throw (Format-Message -Name 'NotInstalled' -Values @($Root)) }
+        $aliases = @()
+        if ($null -ne $state.PSObject.Properties['DeviceAliases']) {
+            $aliases = @($state.DeviceAliases | Where-Object { $null -ne $_ -and [string]$_.Serial -cne $Serial })
+        }
+        if ($normalizedAlias) { $aliases += [pscustomobject]@{ Serial = $Serial; Alias = $normalizedAlias } }
+        $state | Add-Member -NotePropertyName DeviceAliases -NotePropertyValue $aliases -Force
+        Write-State -Root $Root -State $state
+        $script:MenuState = $state
+    }
+    finally { Exit-UpdateLock -Mutex $aliasMutex }
+    return $normalizedAlias
+}
+
+function Show-DeviceAliasMenu {
+    param([string]$Root)
+    Clear-Host
+    if (-not $script:SelectedDeviceSerial) {
+        Write-Host $script:Messages.DeviceAliasNoTarget -ForegroundColor Yellow
+        Wait-ForMenuKey
+        return
+    }
+    $target = Get-DeviceDisplayName -State $script:MenuState -Serial $script:SelectedDeviceSerial
+    $newAlias = Read-Host (Format-Message -Name 'DeviceAliasPrompt' -Values @($target))
+    try {
+        $savedAlias = Set-DeviceAlias -Root $Root -Serial $script:SelectedDeviceSerial -Alias $newAlias
+        if ($savedAlias) { Write-Host (Format-Message -Name 'DeviceAliasSaved' -Values @($savedAlias)) -ForegroundColor Green }
+        else { Write-Host $script:Messages.DeviceAliasRemoved -ForegroundColor Green }
+    }
+    catch { Write-Host $_.Exception.Message -ForegroundColor Red }
+    Wait-ForMenuKey
+}
+
 function Select-AdbDevice {
     param(
         [string]$AdbPath,
         [string[]]$AllowedStatuses = @('device'),
         [switch]$UsbOnly,
-        [switch]$NetworkOnly
+        [switch]$NetworkOnly,
+        [switch]$ChooseAnother
     )
-    $records = @(Get-AdbDeviceRecords -AdbPath $AdbPath | Where-Object { $_.Status -in $AllowedStatuses })
-    if ($UsbOnly) { $records = @($records | Where-Object { $_.Serial -notmatch '(^emulator-|:)' }) }
+    $allRecords = @(Get-AdbDeviceRecords -AdbPath $AdbPath)
+    $records = @($allRecords | Where-Object { $_.Status -in $AllowedStatuses })
+    if ($UsbOnly) { $records = @($records | Where-Object { $_.Serial -notmatch '(^emulator-|:|\._tcp)' }) }
     if ($NetworkOnly) { $records = @($records | Where-Object { $_.Serial -match '^\d{1,3}(?:\.\d{1,3}){3}:5555$' }) }
+    if ($script:PinDeviceSelection -and $script:SelectedDeviceSerial -and -not $ChooseAnother) {
+        $selectedRecord = @($records | Where-Object { $_.Serial -ceq $script:SelectedDeviceSerial })
+        if ($selectedRecord.Count -eq 1) { return [string]$script:SelectedDeviceSerial }
+        Clear-Host
+        $unusableRecord = @($allRecords | Where-Object { $_.Serial -ceq $script:SelectedDeviceSerial } | Select-Object -First 1)
+        if ($unusableRecord.Count -eq 1 -and $unusableRecord[0].Status -notin $AllowedStatuses) {
+            $statusText = Get-LocalizedDeviceStatus -Status ([string]$unusableRecord[0].Status)
+            Write-Host (Format-Message -Name 'SelectedDeviceWrongState' -Values @($script:SelectedDeviceSerial, $statusText)) -ForegroundColor Yellow
+        }
+        else {
+            Write-Host (Format-Message -Name 'SelectedDeviceUnavailable' -Values @($script:SelectedDeviceSerial)) -ForegroundColor Yellow
+        }
+        Wait-ForMenuKey
+        return $null
+    }
     if ($records.Count -eq 0) {
         Clear-Host
         $message = if ($AllowedStatuses.Count -eq 1 -and $AllowedStatuses[0] -eq 'sideload') {
@@ -1142,34 +1693,49 @@ function Select-AdbDevice {
         return $null
     }
     if ($records.Count -eq 1) {
+        if ($script:PinDeviceSelection) { Set-SelectedAdbDevice -Serial ([string]$records[0].Serial) }
         return [string]$records[0].Serial
     }
 
-    $visibleDevices = @($records | Select-Object -First 9)
+    if ($null -ne $script:MenuState -and $null -ne $script:MenuState.PSObject.Properties['RecentDevices']) {
+        $orderedRecords = @()
+        foreach ($recentSerial in @($script:MenuState.RecentDevices)) {
+            $recentRecord = @($records | Where-Object { $_.Serial -ceq [string]$recentSerial } | Select-Object -First 1)
+            if ($recentRecord.Count -eq 1 -and -not @($orderedRecords | Where-Object { $_.Serial -ceq [string]$recentSerial }).Count) {
+                $orderedRecords += $recentRecord[0]
+            }
+        }
+        $orderedRecords += @($records | Where-Object { $serial = $_.Serial; -not @($orderedRecords | Where-Object { $_.Serial -ceq $serial }).Count })
+        $records = $orderedRecords
+    }
+    $serial = Select-PagedRecord -Records $records -Title $script:Messages.ChooseDevice -State $script:MenuState
+    if ($serial -and $script:PinDeviceSelection) { Set-SelectedAdbDevice -Serial $serial }
+    return $serial
+}
+
+function Select-PagedRecord {
+    param([object[]]$Records, [string]$Title, [object]$State = $null)
+    if (-not $Records.Count) { return $null }
+    $page = 0; $pageSize = 9; $pageCount = [int][Math]::Ceiling($Records.Count / $pageSize)
     while ($true) {
         Clear-Host
-        Write-Host '=======================================================================' -ForegroundColor Cyan
-        Write-Host ("                       " + $script:Messages.ChooseDevice) -ForegroundColor Cyan
-        Write-Host '=======================================================================' -ForegroundColor Cyan
-        Write-Host ''
-        for ($index = 0; $index -lt $visibleDevices.Count; $index++) {
-            $label = [string]$visibleDevices[$index].Serial
-            if ($visibleDevices[$index].Model) {
-                $label += "  ($($visibleDevices[$index].Model))"
-            }
-            Write-Host ("  [ {0} ] {1}" -f ($index + 1), $label)
+        Write-Host $Title -ForegroundColor Cyan
+        $visible = @($Records | Select-Object -Skip ($page * $pageSize) -First $pageSize)
+        for ($index = 0; $index -lt $visible.Count; $index++) {
+            $record = $visible[$index]
+            $label = Get-DeviceDisplayName -State $State -Serial $record.Serial
+            if ($record.Model) { $label += '  (' + $record.Model + ')' }
+            if ($record.Status) { $label += ' / ' + (Get-LocalizedDeviceStatus -Status $record.Status) }
+            Write-Host ('  [ {0} ] {1}' -f ($index+1),$label)
         }
         Write-Host ''
-        Write-Host $script:Messages.ChooseDeviceHelp -ForegroundColor Yellow
-        $key = [Console]::ReadKey($true)
-        if ($key.Key -eq [ConsoleKey]::Escape) {
-            return $null
-        }
+        Write-Host (Format-Message -Name 'DevicePage' -Values @(($page+1),$pageCount)) -ForegroundColor Yellow
+        $choice = Read-MenuChoice
+        if ($choice -eq 'Escape') { return $null }
+        if ($choice -eq 'N' -and $page -lt $pageCount-1) { $page++; continue }
+        if ($choice -eq 'P' -and $page -gt 0) { $page--; continue }
         $number = 0
-        if ([int]::TryParse([string]$key.KeyChar, [ref]$number) -and
-            $number -ge 1 -and $number -le $visibleDevices.Count) {
-            return [string]$visibleDevices[$number - 1].Serial
-        }
+        if ([int]::TryParse($choice,[ref]$number) -and $number -ge 1 -and $number -le $visible.Count) { return [string]$visible[$number-1].Serial }
     }
 }
 
@@ -1179,15 +1745,12 @@ function Get-AdbProperty {
         [string]$Serial,
         [string]$Property
     )
-    $previousPreference = $ErrorActionPreference
     try {
-        $ErrorActionPreference = 'Continue'
-        $output = @(& $AdbPath -s $Serial shell getprop $Property 2>$null)
-        if ($LASTEXITCODE -ne 0 -or $output.Count -eq 0) { return '' }
-        return ([string]$output[0]).Trim()
+        $result = Invoke-ToolProcess -Executable $AdbPath -Arguments @('-s',$Serial,'shell','getprop',$Property) -TimeoutSeconds 10 -QuietProgress
+        if ($result.ExitCode -ne 0 -or -not $result.Output) { return '' }
+        return ([string]($result.Output -split '\r?\n')[0]).Trim()
     }
     catch { return '' }
-    finally { $ErrorActionPreference = $previousPreference }
 }
 
 function Get-AdbSdkLevel {
@@ -1224,6 +1787,19 @@ function Show-DeviceInfo {
     Wait-ForMenuKey
 }
 
+function Test-CaptureSignature {
+    param([string]$Path, [ValidateSet('PNG','MP4')][string]$Format)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
+    $stream = [IO.File]::OpenRead($Path)
+    try {
+        $header = New-Object byte[] 12
+        $read = $stream.Read($header,0,$header.Length)
+        if ($Format -eq 'PNG') { return $read -ge 8 -and [BitConverter]::ToString($header,0,8) -eq '89-50-4E-47-0D-0A-1A-0A' }
+        return $read -ge 8 -and [Text.Encoding]::ASCII.GetString($header,4,4) -eq 'ftyp'
+    }
+    finally { $stream.Dispose() }
+}
+
 function Save-AdbScreenshot {
     param(
         [string]$AdbPath,
@@ -1236,17 +1812,20 @@ function Save-AdbScreenshot {
     $errorFile = Join-Path ([IO.Path]::GetTempPath()) ('LeanADB-screenshot-' + [guid]::NewGuid().ToString('N') + '.log')
     try {
         $directSucceeded = $false
+        $cancelled = $false
         try {
-            $process = Start-Process -FilePath $AdbPath -ArgumentList @(
+            $process = Invoke-ToolProcess -Executable $AdbPath -Arguments @(
                 '-s', $Serial, 'exec-out', 'screencap', '-p'
-            ) -NoNewWindow -Wait -PassThru -RedirectStandardOutput $temporary -RedirectStandardError $errorFile
+            ) -TimeoutSeconds 60 -OutputFile $temporary
+            $cancelled = $process.Cancelled
             $directSucceeded = $process.ExitCode -eq 0 -and
                 (Test-Path -LiteralPath $temporary -PathType Leaf) -and
-                (Get-Item -LiteralPath $temporary).Length -gt 0
+                (Test-CaptureSignature -Path $temporary -Format PNG)
         }
         catch {
             $directSucceeded = $false
         }
+        if ($cancelled) { throw $script:Messages.OperationCancelled }
         if (-not $directSucceeded) {
             Write-Host $script:Messages.ScreenshotFallback -ForegroundColor Yellow
             if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force }
@@ -1254,20 +1833,22 @@ function Save-AdbScreenshot {
             $previousPreference = $ErrorActionPreference
             try {
                 $ErrorActionPreference = 'Continue'
-                & $AdbPath -s $Serial shell screencap -p $remotePath
-                if ($LASTEXITCODE -ne 0) { throw 'Legacy device screenshot command failed.' }
-                & $AdbPath -s $Serial pull $remotePath $temporary
-                if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $temporary -PathType Leaf) -or
+                $capture = Invoke-ToolProcess -Executable $AdbPath -Arguments @('-s',$Serial,'shell','screencap','-p',$remotePath) -TimeoutSeconds 60
+                if ($capture.ExitCode -ne 0) { throw 'Legacy device screenshot command failed.' }
+                $transfer = Invoke-ToolProcess -Executable $AdbPath -Arguments @('-s',$Serial,'pull',$remotePath,$temporary) -TimeoutSeconds 60
+                if ($transfer.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $temporary -PathType Leaf) -or
                     (Get-Item -LiteralPath $temporary).Length -eq 0) {
                     throw 'Legacy device screenshot transfer failed.'
                 }
             }
             finally {
-                try { & $AdbPath -s $Serial shell rm $remotePath 2>$null | Out-Null } catch { }
+                try { [void](Invoke-ToolProcess -Executable $AdbPath -Arguments @('-s',$Serial,'shell','rm',$remotePath) -TimeoutSeconds 10 -QuietProgress) } catch { }
                 $ErrorActionPreference = $previousPreference
             }
         }
+        if (-not (Test-CaptureSignature -Path $temporary -Format PNG)) { throw 'The device did not return a valid PNG header.' }
         Move-Item -LiteralPath $temporary -Destination $destination -Force
+        $script:LastSavedPath = $destination
         Write-Host ''
         Write-Host (Format-Message -Name 'ScreenshotSaved' -Values @($destination)) -ForegroundColor Green
     }
@@ -1309,19 +1890,21 @@ function Save-AdbScreenrecord {
     try {
         $ErrorActionPreference = 'Continue'
         Write-Host (Format-Message -Name 'ScreenrecordRunning' -Values @($seconds))
-        & $AdbPath -s $Serial shell screenrecord --time-limit $seconds $remotePath
-        if ($LASTEXITCODE -ne 0) { throw $script:Messages.ScreenrecordFailed }
-        & $AdbPath -s $Serial pull $remotePath $temporary
-        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $temporary -PathType Leaf) -or
+        $record = Invoke-ToolProcess -Executable $AdbPath -Arguments @('-s',$Serial,'shell','screenrecord','--time-limit',[string]$seconds,$remotePath) -TimeoutSeconds ($seconds + 30)
+        if ($record.ExitCode -ne 0) { throw (Get-CommandAdvice -Output $record.Output -ExitCode $record.ExitCode) }
+        $transfer = Invoke-ToolProcess -Executable $AdbPath -Arguments @('-s',$Serial,'pull',$remotePath,$temporary)
+        if ($transfer.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $temporary -PathType Leaf) -or
             (Get-Item -LiteralPath $temporary).Length -eq 0) { throw $script:Messages.ScreenrecordFailed }
+        if (-not (Test-CaptureSignature -Path $temporary -Format MP4)) { throw $script:Messages.ScreenrecordFailed }
         Move-Item -LiteralPath $temporary -Destination $destination
+        $script:LastSavedPath = $destination
         Write-Host (Format-Message -Name 'ScreenrecordSaved' -Values @($destination)) -ForegroundColor Green
     }
     catch {
         Write-Host "$($script:Messages.ScreenrecordFailed) $($_.Exception.Message)" -ForegroundColor Red
     }
     finally {
-        try { & $AdbPath -s $Serial shell rm $remotePath 2>$null | Out-Null } catch { }
+        try { [void](Invoke-ToolProcess -Executable $AdbPath -Arguments @('-s',$Serial,'shell','rm',$remotePath) -TimeoutSeconds 10 -QuietProgress) } catch { }
         $ErrorActionPreference = $previousPreference
         if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force }
     }
@@ -1347,8 +1930,9 @@ function Receive-AdbPath {
     $previousPreference = $ErrorActionPreference
     try {
         $ErrorActionPreference = 'Continue'
-        & $AdbPath -s $Serial pull $RemotePath $destination
-        $receiveExitCode = $LASTEXITCODE
+        $transfer = Invoke-ToolProcess -Executable $AdbPath -Arguments @('-s',$Serial,'pull',$RemotePath,$destination)
+        if ($transfer.Output) { Write-Host $transfer.Output }
+        $receiveExitCode = $transfer.ExitCode
     }
     finally {
         $ErrorActionPreference = $previousPreference
@@ -1356,7 +1940,8 @@ function Receive-AdbPath {
     if ($receiveExitCode -eq 0) {
         Write-Host ''
         Write-Host (Format-Message -Name 'ReceiveCompleted' -Values @($destination)) -ForegroundColor Green
-        Start-Process -FilePath 'explorer.exe' -ArgumentList @($destination)
+        $script:LastSavedPath = $destination
+        Start-Process -FilePath 'explorer.exe' -ArgumentList @('"' + $destination + '"')
     }
     else {
         if (@(Get-ChildItem -LiteralPath $destination -Force).Count -eq 0) { Remove-Item -LiteralPath $destination -Force }
@@ -1374,15 +1959,16 @@ function Save-AdbLogcat {
     $destination = Join-Path $outputFolder ('LeanADB-Logcat-' + [DateTime]::Now.ToString('yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 6) + '.txt')
     $errorFile = Join-Path ([IO.Path]::GetTempPath()) ('LeanADB-logcat-' + [guid]::NewGuid().ToString('N') + '.log')
     try {
-        $process = Start-Process -FilePath $AdbPath -ArgumentList @(
+        $process = Invoke-ToolProcess -Executable $AdbPath -Arguments @(
             '-s', $Serial, 'logcat', '-d', '-v', 'threadtime'
-        ) -NoNewWindow -Wait -PassThru -RedirectStandardOutput $destination -RedirectStandardError $errorFile
+        ) -TimeoutSeconds 60 -OutputFile $destination
         if ($process.ExitCode -ne 0) {
-            $details = if (Test-Path -LiteralPath $errorFile) { (Get-Content -LiteralPath $errorFile -Raw).Trim() } else { '' }
+            $details = $process.Output
             throw "Logcat failed (exit code $($process.ExitCode)). $details"
         }
         Write-Host ''
         Write-Host (Format-Message -Name 'LogcatSaved' -Values @($destination)) -ForegroundColor Green
+        $script:LastSavedPath = $destination
     }
     catch {
         if (Test-Path -LiteralPath $destination) { Remove-Item -LiteralPath $destination -Force }
@@ -1408,7 +1994,17 @@ function Read-SecureConsoleText {
 
 function Test-AdbEndpoint {
     param([string]$Endpoint)
-    return $Endpoint -match '^\S+:\d{1,5}$'
+    if ($Endpoint -notmatch '^(\[[0-9A-Fa-f:%.]+\]|[A-Za-z0-9][A-Za-z0-9.-]*):(\d{1,5})$') { return $false }
+    $hostName = $Matches[1]; $port = [int]$Matches[2]
+    if ($port -lt 1 -or $port -gt 65535) { return $false }
+    if ($hostName.StartsWith('[')) {
+        $address = $null
+        return [Net.IPAddress]::TryParse($hostName.Trim('[',']'), [ref]$address) -and $address.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetworkV6
+    }
+    if ($hostName -match '^\d+(?:\.\d+)+$') {
+        return $hostName -match '^\d{1,3}(?:\.\d{1,3}){3}$' -and -not @($hostName.Split('.') | Where-Object { [int]$_ -gt 255 }).Count
+    }
+    return [Uri]::CheckHostName($hostName) -eq [UriHostNameType]::Dns
 }
 
 function Test-PrivateIpv4 {
@@ -1427,7 +2023,10 @@ function Start-LegacyWireless {
     if (-not $serial) { return }
     Clear-Host
     Write-Host $script:Messages.LegacyWifiHelp -ForegroundColor Yellow
-    $address = (Read-Host -Prompt $script:Messages.LegacyWifiAddress).Trim()
+    $suggested = Get-AdbProperty -AdbPath $AdbPath -Serial $serial -Property 'dhcp.wlan0.ipaddress'
+    $prompt = if (Test-PrivateIpv4 -Address $suggested) { Format-Message -Name 'WirelessSuggestedIp' -Values @($suggested) } else { $script:Messages.LegacyWifiAddress }
+    $address = (Read-Host -Prompt $prompt).Trim()
+    if (-not $address -and (Test-PrivateIpv4 -Address $suggested)) { $address = $suggested }
     if (-not (Test-PrivateIpv4 -Address $address)) {
         Write-Host $script:Messages.InvalidLocalIp -ForegroundColor Red
         Wait-ForMenuKey
@@ -1439,8 +2038,8 @@ function Start-LegacyWireless {
     $previousPreference = $ErrorActionPreference
     try {
         $ErrorActionPreference = 'Continue'
-        & $AdbPath -s $serial tcpip 5555
-        $tcpipExit = $LASTEXITCODE
+        $tcpip = Invoke-ToolProcess -Executable $AdbPath -Arguments @('-s',$serial,'tcpip','5555') -TimeoutSeconds 30
+        $tcpipExit = $tcpip.ExitCode
     }
     finally { $ErrorActionPreference = $previousPreference }
     if ($tcpipExit -ne 0) {
@@ -1448,18 +2047,23 @@ function Start-LegacyWireless {
         Wait-ForMenuKey
         return
     }
-    Invoke-MenuCommand -Executable $AdbPath -Arguments @('connect', $endpoint)
+    $connection = Invoke-MenuCommand -Executable $AdbPath -Arguments @('connect', $endpoint)
+    if ($null -ne $connection -and $connection.ExitCode -eq 0 -and $script:PinDeviceSelection) {
+        $ready = @(Get-AdbDeviceRecords -AdbPath $AdbPath | Where-Object { $_.Serial -ceq $endpoint -and $_.Status -eq 'device' })
+        if ($ready.Count) { Set-SelectedAdbDevice -Serial $endpoint; Write-Host (Format-Message -Name 'WirelessSelected' -Values @($endpoint)) }
+    }
 }
 
 function Return-LegacyWirelessToUsb {
     param([string]$AdbPath)
-    $serial = Select-AdbDevice -AdbPath $AdbPath -NetworkOnly
+    $serial = Select-AdbDevice -AdbPath $AdbPath -NetworkOnly -ChooseAnother
     if (-not $serial) { return }
+    if (-not (Confirm-MenuAction -Prompt (Format-Message -Name 'WirelessUsbConfirm' -Values @($serial)))) { return }
     $previousPreference = $ErrorActionPreference
     try {
         $ErrorActionPreference = 'Continue'
-        & $AdbPath -s $serial usb
-        $usbExit = $LASTEXITCODE
+        $usb = Invoke-ToolProcess -Executable $AdbPath -Arguments @('-s',$serial,'usb') -TimeoutSeconds 30
+        $usbExit = $usb.ExitCode
     }
     finally { $ErrorActionPreference = $previousPreference }
     if ($usbExit -eq 0) {
@@ -1484,6 +2088,7 @@ function Show-WirelessMenu {
         Write-Host "  $($script:Messages.WirelessDisconnect)"
         Write-Host "  $($script:Messages.WirelessLegacy)"
         Write-Host "  $($script:Messages.WirelessReturnUsb)"
+        Write-Host "  $($script:Messages.WirelessDiscovery)"
         Write-Host ''
         Write-Host "  $($script:Messages.WirelessBack)" -ForegroundColor Yellow
         $key = [Console]::ReadKey($true)
@@ -1503,7 +2108,7 @@ function Show-WirelessMenu {
                     Wait-ForMenuKey
                     continue
                 }
-                Invoke-MenuCommand -Executable $AdbPath -Arguments @('pair', $endpoint, $code)
+                [void](Invoke-MenuCommand -Executable $AdbPath -Arguments @('pair', $endpoint, $code))
                 $code = $null
             }
             'C' {
@@ -1514,12 +2119,19 @@ function Show-WirelessMenu {
                     Wait-ForMenuKey
                     continue
                 }
-                Invoke-MenuCommand -Executable $AdbPath -Arguments @('connect', $endpoint)
+                $connection = Invoke-MenuCommand -Executable $AdbPath -Arguments @('connect', $endpoint)
+                if ($connection.ExitCode -eq 0 -and $script:PinDeviceSelection) {
+                    $ready = @(Get-AdbDeviceRecords -AdbPath $AdbPath | Where-Object { $_.Serial -ceq $endpoint -and $_.Status -eq 'device' })
+                    if ($ready.Count) { Set-SelectedAdbDevice -Serial $endpoint }
+                }
             }
             'D' {
                 Clear-Host
-                Invoke-MenuCommand -Executable $AdbPath -Arguments @('disconnect')
+                $network = @(Get-AdbDeviceRecords -AdbPath $AdbPath | Where-Object { $_.Serial -match ':|\._tcp' })
+                $serial = Select-PagedRecord -Records $network -Title $script:Messages.WirelessDisconnect -State $script:MenuState
+                if ($serial) { [void](Invoke-MenuCommand -Executable $AdbPath -Arguments @('disconnect',$serial)) }
             }
+            'M' { [void](Invoke-MenuCommand -Executable $AdbPath -Arguments @('mdns','services')) }
             'L' { Start-LegacyWireless -AdbPath $AdbPath }
             'U' { Return-LegacyWirelessToUsb -AdbPath $AdbPath }
         }
@@ -1587,6 +2199,18 @@ function Show-ConnectionHelp {
     }
 }
 
+function Get-AdbStatusAdvice {
+    param([string]$Status)
+    switch ($Status) {
+        'device' { return $script:Messages.DiagnoseReady }
+        'unauthorized' { return $script:Messages.DiagnoseUnauthorized }
+        'offline' { return $script:Messages.DiagnoseOffline }
+        'recovery' { return $script:Messages.DiagnoseRecovery }
+        'sideload' { return $script:Messages.DiagnoseSideload }
+        default { return '' }
+    }
+}
+
 function Show-ConnectionDiagnostics {
     param([string]$Root, [string]$AdbPath, [string]$FastbootPath, [object]$State)
     $latestState = Read-State -Root $Root
@@ -1610,19 +2234,12 @@ function Show-ConnectionDiagnostics {
     if ($records.Count -eq 0) { Write-Host $script:Messages.DiagnoseNoDevice -ForegroundColor Yellow }
     foreach ($record in $records) {
         Write-Host (Format-Message -Name 'DeviceStatus' -Values @($record.Serial, (Get-LocalizedDeviceStatus -Status $record.Status), $record.Model))
-        $hint = switch ($record.Status) {
-            'device' { $script:Messages.DiagnoseReady }
-            'unauthorized' { $script:Messages.DiagnoseUnauthorized }
-            'offline' { $script:Messages.DiagnoseOffline }
-            'recovery' { $script:Messages.DiagnoseRecovery }
-            'sideload' { $script:Messages.DiagnoseSideload }
-            default { '' }
-        }
+        $hint = Get-AdbStatusAdvice -Status $record.Status
         if ($hint) { Write-Host "  $hint" }
     }
-    $fastbootSerials = if ($fastbootExitCode -eq 0) {
+    $fastbootSerials = @(if ($fastbootExitCode -eq 0) {
         @($fastbootDevices | ForEach-Object { if ([string]$_ -match '^([^\s]+)\s+fastboot(?:\s|$)') { $Matches[1] } })
-    } else { @() }
+    })
     if ($fastbootSerials.Count) {
         foreach ($serial in $fastbootSerials) {
             Write-Host (Format-Message -Name 'DiagnoseFastboot' -Values @($serial)) -ForegroundColor Green
@@ -1638,6 +2255,68 @@ function Show-ConnectionDiagnostics {
     } else { $script:Messages.UsbBackendStandard }
     Write-Host (Format-Message -Name 'DiagnoseUsbBackend' -Values @($backend))
     Wait-ForMenuKey
+}
+
+function Show-ConnectionGuide {
+    param([string]$Root, [string]$AdbPath, [string]$FastbootPath)
+    while ($true) {
+        $records = @(Get-AdbDeviceRecords -AdbPath $AdbPath)
+        $previousPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = 'Continue'
+            $fastbootOutput = @(& $FastbootPath devices 2>&1)
+            $fastbootExitCode = $LASTEXITCODE
+        }
+        finally { $ErrorActionPreference = $previousPreference }
+        $fastbootSerials = @()
+        if ($fastbootExitCode -eq 0) {
+            foreach ($line in $fastbootOutput) {
+                if ([string]$line -match '^([^\s]+)\s+fastboot(?:\s|$)') { $fastbootSerials += [string]$Matches[1] }
+            }
+        }
+
+        Clear-Host
+        Write-Host $script:Messages.ConnectionGuideTitle -ForegroundColor Cyan
+        Write-Host ''
+        if ($script:SelectedDeviceSerial) {
+            $targetName = Get-DeviceDisplayName -State $script:MenuState -Serial $script:SelectedDeviceSerial
+            $selectedRecord = @($records | Where-Object { $_.Serial -ceq $script:SelectedDeviceSerial } | Select-Object -First 1)
+            if ($selectedRecord.Count -eq 1) {
+                $statusText = Get-LocalizedDeviceStatus -Status ([string]$selectedRecord[0].Status)
+                Write-Host (Format-Message -Name 'MenuTargetSelected' -Values @($targetName, $statusText)) -ForegroundColor Cyan
+            }
+            else { Write-Host (Format-Message -Name 'MenuTargetUnavailable' -Values @($targetName)) -ForegroundColor Yellow }
+        }
+        else { Write-Host $script:Messages.MenuTargetNone -ForegroundColor DarkGray }
+        Write-Host ''
+        foreach ($record in $records) {
+            Write-Host (Format-Message -Name 'DeviceStatus' -Values @($record.Serial, (Get-LocalizedDeviceStatus -Status $record.Status), $record.Model))
+            $advice = Get-AdbStatusAdvice -Status $record.Status
+            if ($advice) { Write-Host "  $advice" -ForegroundColor Yellow }
+        }
+        foreach ($serial in $fastbootSerials) {
+            Write-Host (Format-Message -Name 'DiagnoseFastboot' -Values @($serial)) -ForegroundColor Green
+        }
+        if ($records.Count -eq 0) {
+            $advice = if ($fastbootSerials.Count) { $script:Messages.ConnectionGuideFastbootOnly } else { $script:Messages.DiagnoseNoDevice }
+            Write-Host $advice -ForegroundColor Yellow
+        }
+        if ($records.Count -gt 1) { Write-Host $script:Messages.ConnectionGuideMultiple -ForegroundColor Yellow }
+        Write-Host ''
+        Write-Host "  $($script:Messages.ConnectionGuideRefresh)"
+        Write-Host "  $($script:Messages.ConnectionGuideChoose)"
+        Write-Host "  $($script:Messages.ConnectionGuideDiagnose)"
+        Write-Host "  $($script:Messages.ConnectionGuideHelp)"
+        Write-Host "  $($script:Messages.ConnectionGuideBack)" -ForegroundColor Yellow
+        $key = [Console]::ReadKey($true)
+        switch ($key.Key) {
+            'Escape' { return }
+            'R' { continue }
+            'C' { [void](Select-AdbDevice -AdbPath $AdbPath -AllowedStatuses @('device', 'offline', 'unauthorized', 'sideload', 'recovery') -ChooseAnother) }
+            'X' { Show-ConnectionDiagnostics -Root $Root -AdbPath $AdbPath -FastbootPath $FastbootPath -State (Read-State -Root $Root) }
+            'H' { Show-ConnectionHelp -Root $Root -AdbPath $AdbPath }
+        }
+    }
 }
 
 function Show-OutputFolderMenu {
@@ -1833,13 +2512,15 @@ function Save-AdbBugreport {
     $previousPreference = $ErrorActionPreference
     try {
         $ErrorActionPreference = 'Continue'
-        & $AdbPath -s $Serial bugreport $destination
-        $reportExitCode = $LASTEXITCODE
+        $report = Invoke-ToolProcess -Executable $AdbPath -Arguments @('-s',$Serial,'bugreport',$destination) -TimeoutSeconds 600
+        if ($report.Output) { Write-Host $report.Output }
+        $reportExitCode = $report.ExitCode
     }
     finally { $ErrorActionPreference = $previousPreference }
     if ($reportExitCode -eq 0 -and @(Get-ChildItem -LiteralPath $destination -Recurse -File).Count -gt 0) {
         Write-Host (Format-Message -Name 'BugreportSaved' -Values @($destination)) -ForegroundColor Green
-        Start-Process -FilePath 'explorer.exe' -ArgumentList @($destination)
+        $script:LastSavedPath = $destination
+        Start-Process -FilePath 'explorer.exe' -ArgumentList @('"' + $destination + '"')
     }
     else {
         Write-Host (Format-Message -Name 'BugreportFailed' -Values @($destination)) -ForegroundColor Red
@@ -1855,6 +2536,7 @@ function Show-ExtrasMenu {
         Write-Host (Format-Message -Name 'OutputFolderCurrent' -Values @($script:ActiveOutputFolder))
         Write-Host ''
         Write-Host "  $($script:Messages.MenuDiagnose)"
+        Write-Host "  $($script:Messages.MenuRepair)"
         Write-Host "  $($script:Messages.MenuBrowse)"
         Write-Host "  $($script:Messages.MenuBugreport)"
         Write-Host "  $($script:Messages.MenuOutput)"
@@ -1865,6 +2547,10 @@ function Show-ExtrasMenu {
         switch ($key.Key) {
             'Escape' { return }
             'X' { Show-ConnectionDiagnostics -Root $Root -AdbPath $AdbPath -FastbootPath $FastbootPath -State (Read-State -Root $Root) }
+            'Y' {
+                & $PSCommandPath -Action Repair -InstallPath $Root
+                Wait-ForMenuKey
+            }
             'F' {
                 $serial = Select-AdbDevice -AdbPath $AdbPath
                 if ($serial) { Browse-AdbFiles -AdbPath $AdbPath -Serial $serial }
@@ -1951,7 +2637,7 @@ function Start-AdbSideload {
         Wait-ForMenuKey
         return
     }
-    Invoke-MenuCommand -Executable $AdbPath -Arguments @('-s', $serial, 'sideload', $package)
+    [void](Invoke-MenuCommand -Executable $AdbPath -Arguments @('-s', $serial, 'sideload', $package))
 }
 
 function Show-RebootMenu {
@@ -1977,7 +2663,7 @@ function Show-RebootMenu {
             if (-not $fastbootSerial) { continue }
             $prompt = Format-Message -Name 'RebootConfirm' -Values @($fastbootSerial, $script:Messages.RebootDestinationSystem)
             if (-not (Confirm-MenuAction -Prompt $prompt)) { continue }
-            Invoke-MenuCommand -Executable $FastbootPath -Arguments @('-s', $fastbootSerial, 'reboot')
+            [void](Invoke-MenuCommand -Executable $FastbootPath -Arguments @('-s', $fastbootSerial, 'reboot'))
             return
         }
         $serial = Select-AdbDevice -AdbPath $AdbPath
@@ -1987,7 +2673,7 @@ function Show-RebootMenu {
         if (-not (Confirm-MenuAction -Prompt $prompt)) { continue }
         $arguments = @('-s', $serial, 'reboot')
         if ($destination -eq 'bootloader') { $arguments += 'bootloader' }
-        Invoke-MenuCommand -Executable $AdbPath -Arguments $arguments
+        [void](Invoke-MenuCommand -Executable $AdbPath -Arguments $arguments)
         return
     }
 }
@@ -2012,212 +2698,237 @@ function Select-FastbootDevice {
         Wait-ForMenuKey
         return $null
     }
-    if ($serials.Count -eq 1) { return [string]$serials[0] }
-    $visible = @($serials | Select-Object -First 9)
+    if ($script:PinDeviceSelection -and $script:SelectedDeviceSerial -and $script:SelectedDeviceSerial -cin $serials) { return $script:SelectedDeviceSerial }
+    if ($serials.Count -eq 1) {
+        $serial = [string]$serials[0]
+        if ($script:PinDeviceSelection -and $script:SelectedDeviceSerial -and $serial -cne $script:SelectedDeviceSerial) {
+            if (-not (Confirm-MenuAction -Prompt (Format-Message -Name 'FastbootTargetConfirm' -Values @($serial,$script:SelectedDeviceSerial)))) { return $null }
+        }
+        return $serial
+    }
+    $records = @($serials | ForEach-Object { [pscustomobject]@{Serial=$_;Model='';Status='fastboot'} })
+    return Select-PagedRecord -Records $records -Title $script:Messages.ChooseDevice -State $script:MenuState
+}
+
+function Read-MenuChoice {
+    $key = [Console]::ReadKey($true)
+    if ($key.Key -eq [ConsoleKey]::Escape) { return 'Escape' }
+    if ($key.Key -eq [ConsoleKey]::Enter) { return 'Enter' }
+    return ([string]$key.KeyChar).ToUpperInvariant()
+}
+
+function Read-HomeChoice {
+    param([string]$Root)
+    $path = Get-StatePath -Root $Root
+    $stamp = if (Test-Path -LiteralPath $path) { (Get-Item -LiteralPath $path).LastWriteTimeUtc.Ticks } else { 0 }
+    $nextCheck = [DateTime]::UtcNow.AddSeconds(2)
+    while ($true) {
+        if ([Console]::KeyAvailable) { return Read-MenuChoice }
+        if ([DateTime]::UtcNow -ge $nextCheck) {
+            $latest = if (Test-Path -LiteralPath $path) { (Get-Item -LiteralPath $path).LastWriteTimeUtc.Ticks } else { 0 }
+            if ($latest -ne $stamp) { return 'Refresh' }
+            $nextCheck = [DateTime]::UtcNow.AddSeconds(2)
+        }
+        Start-Sleep -Milliseconds 100
+    }
+}
+
+function Show-ActionError {
+    param([string]$Details)
+    Write-Host (Format-Message -Name 'ActionError' -Values @($Details)) -ForegroundColor Red
+    Write-Host $script:Messages.CommandRetryAdvice -ForegroundColor Yellow
+    Wait-ForMenuKey
+}
+
+function Open-SavedFiles {
+    $folder = Get-ActiveOutputFolder
+    Start-Process -FilePath 'explorer.exe' -ArgumentList @('"' + $folder + '"')
+}
+
+function Open-RecentSavedFiles {
+    $folder = Get-ActiveOutputFolder
+    $entries = @(Get-ChildItem -LiteralPath $folder -Filter 'LeanADB-*' | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 50)
+    if (-not $entries.Count) { Write-Host $script:Messages.RecentEmpty; Wait-ForMenuKey; return }
+    $records = @($entries | ForEach-Object { [pscustomobject]@{ Serial = $_.Name; Model = ''; Status = '' } })
+    $chosen = Select-PagedRecord -Records $records -Title $script:Messages.ActionRecent
+    if ($chosen) {
+        $path = Join-Path $folder $chosen
+        if (Test-Path -LiteralPath $path -PathType Container) { Start-Process -FilePath 'explorer.exe' -ArgumentList @('"' + $path + '"') }
+        else { Start-Process -FilePath 'explorer.exe' -ArgumentList @('/select,"' + $path + '"') }
+    }
+}
+
+function Show-InstallApks {
+    param([string]$AdbPath)
+    $serial = Select-AdbDevice -AdbPath $AdbPath
+    if (-not $serial) { return }
+    $files = @(Select-LocalFile -Title $script:Messages.ChooseApks -Filter 'Android packages (*.apk)|*.apk' -Multiple)
+    if (-not $files.Count) { return }
+    if ($files.Count -eq 1) { Install-ApkBatch -AdbPath $AdbPath -Serial $serial -Paths $files; return }
+    Clear-Host
+    Write-Host (Format-Message -Name 'ApkModeTitle' -Values @($files.Count)) -ForegroundColor Cyan
+    Write-Host $script:Messages.ApkModeIndependent
+    Write-Host $script:Messages.ApkModeSplit
+    Write-Host $script:Messages.ApkModeHint -ForegroundColor Yellow
+    do { $mode = Read-MenuChoice } while ($mode -notin @('1','2','Escape'))
+    if ($mode -eq 'Escape') { return }
+    if ($mode -eq '1') { Install-ApkBatch -AdbPath $AdbPath -Serial $serial -Paths $files; return }
+    Install-SplitApkBatch -AdbPath $AdbPath -Serial $serial -Paths $files
+}
+
+function Invoke-UiAction {
+    param([string]$Name, [string]$Root, [string]$AdbPath, [string]$FastbootPath)
+    switch ($Name) {
+        'Connect' { Show-ConnectionGuide -Root $Root -AdbPath $AdbPath -FastbootPath $FastbootPath }
+        'Choose' { [void](Select-AdbDevice -AdbPath $AdbPath -AllowedStatuses @('device','offline','unauthorized','sideload','recovery') -ChooseAnother) }
+        'Alias' { Show-DeviceAliasMenu -Root $Root }
+        'ActionInstall' { Show-InstallApks -AdbPath $AdbPath }
+        'ActionSend' {
+            $serial = Select-AdbDevice -AdbPath $AdbPath
+            if ($serial) {
+                $files = @(Select-LocalFile -Title $script:Messages.ChooseFiles -Filter 'All files (*.*)|*.*' -Multiple)
+                if ($files.Count) { Send-FilesToDevice -AdbPath $AdbPath -Serial $serial -Paths $files }
+            }
+        }
+        { $_ -in @('ActionBrowse','ActionReceive','ActionScreenshot','ActionRecord','ActionLogcat','ActionBugreport') } {
+            $serial = Select-AdbDevice -AdbPath $AdbPath
+            if (-not $serial) { return }
+            switch ($Name) {
+                'ActionBrowse' { Browse-AdbFiles -AdbPath $AdbPath -Serial $serial }
+                'ActionReceive' { Receive-AdbPath -AdbPath $AdbPath -Serial $serial }
+                'ActionScreenshot' { Save-AdbScreenshot -AdbPath $AdbPath -Serial $serial }
+                'ActionRecord' { Save-AdbScreenrecord -AdbPath $AdbPath -Serial $serial }
+                'ActionLogcat' { Save-AdbLogcat -AdbPath $AdbPath -Serial $serial }
+                'ActionBugreport' { Save-AdbBugreport -AdbPath $AdbPath -Serial $serial }
+            }
+        }
+        'HomeSaved' { Open-SavedFiles }
+        'ActionRecent' { Open-RecentSavedFiles }
+        'Retry' { Retry-LastBatch -AdbPath $AdbPath }
+        'ActionInfo' { Show-DeviceInfo -AdbPath $AdbPath }
+        'ActionReboot' { Show-RebootMenu -AdbPath $AdbPath -FastbootPath $FastbootPath }
+        'ActionSideload' { Start-AdbSideload -AdbPath $AdbPath }
+        'ActionWireless' { Show-WirelessMenu -AdbPath $AdbPath }
+        'ActionFastboot' { [void](Invoke-MenuCommand -Executable $FastbootPath -Arguments @('devices')) }
+        'ActionOutput' { Show-OutputFolderMenu -Root $Root }
+        'ActionLanguage' { Show-LanguageMenu -Root $Root }
+        'ActionInstallFolder' { Start-Process -FilePath 'explorer.exe' -ArgumentList @('"' + $Root + '"') }
+        'ActionDiagnose' { Show-ConnectionDiagnostics -Root $Root -AdbPath $AdbPath -FastbootPath $FastbootPath -State (Read-State -Root $Root) }
+        'ActionDriver' { Show-ConnectionHelp -Root $Root -AdbPath $AdbPath }
+        'ActionUpdate' {
+            & $PSCommandPath -Action Update -InstallPath $Root
+            if ($LASTEXITCODE -ne 0) { throw $script:Messages.CommandRetryAdvice }
+            Write-Host $script:Messages.RestartMenuHint -ForegroundColor Yellow
+            Wait-ForMenuKey
+        }
+        'ActionRepair' {
+            & $PSCommandPath -Action Repair -InstallPath $Root
+            if ($LASTEXITCODE -ne 0) { throw $script:Messages.CommandRetryAdvice }
+            Wait-ForMenuKey
+        }
+        'ActionOffline' {
+            $zip = Select-LocalFile -Title $script:Messages.OfflineZipChoose -Filter 'ZIP archives (*.zip)|*.zip'
+            if ($zip -and (Confirm-MenuAction -Prompt (Format-Message -Name 'OfflineZipConfirm' -Values @($zip)))) {
+                & $PSCommandPath -Action Update -InstallPath $Root -OfflineZipPath $zip
+                if ($LASTEXITCODE -ne 0) { throw $script:Messages.CommandRetryAdvice }
+                Wait-ForMenuKey
+            }
+        }
+        'Terminal' {
+            & $PSCommandPath -Action Terminal -InstallPath $Root
+            if ($LASTEXITCODE -ne 0) { throw $script:Messages.CommandRetryAdvice }
+        }
+    }
+}
+
+function Invoke-SafeUiAction {
+    param([string]$Name, [string]$Root, [string]$AdbPath, [string]$FastbootPath)
+    try { Invoke-UiAction -Name $Name -Root $Root -AdbPath $AdbPath -FastbootPath $FastbootPath }
+    catch { Show-ActionError -Details $_.Exception.Message }
+}
+
+function Show-TaskGroup {
+    param([string]$Group, [string]$Root, [string]$AdbPath, [string]$FastbootPath)
+    $actions = switch ($Group) {
+        'HomeApps' { @('ActionInstall') }
+        'HomeFiles' { @('ActionSend','ActionBrowse','ActionReceive','ActionScreenshot','ActionRecord','HomeSaved','ActionRecent') }
+        'HomeDevice' { @('ActionInfo','ActionReboot','ActionSideload','ActionWireless','ActionLogcat','ActionBugreport','ActionFastboot') }
+        'HomeSettings' { @('ActionUpdate','ActionRepair','ActionOutput','ActionLanguage','ActionInstallFolder','ActionDiagnose','ActionDriver','ActionOffline') }
+    }
+    $actions = @($actions)
     while ($true) {
         Clear-Host
-        Write-Host $script:Messages.ChooseDevice -ForegroundColor Cyan
-        for ($index = 0; $index -lt $visible.Count; $index++) {
-            Write-Host ('  [ {0} ] {1}' -f ($index + 1), $visible[$index])
-        }
-        Write-Host $script:Messages.ChooseDeviceHelp -ForegroundColor Yellow
-        $key = [Console]::ReadKey($true)
-        if ($key.Key -eq [ConsoleKey]::Escape) { return $null }
+        Write-Host $script:Messages[$Group] -ForegroundColor Cyan
+        if ($script:SelectedDeviceSerial) { Write-Host (Get-DeviceDisplayName -State $script:MenuState -Serial $script:SelectedDeviceSerial) -ForegroundColor DarkGray }
+        Write-Host ''
+        for ($index = 0; $index -lt $actions.Count; $index++) { Write-Host ('  [ {0} ] {1}' -f ($index+1),$script:Messages[$actions[$index]]) }
+        if ($Group -in @('HomeApps','HomeFiles')) { Write-Host "  $($script:Messages.MenuRetry)" }
+        Write-Host ''
+        Write-Host $script:Messages.MenuBackHint -ForegroundColor Yellow
+        $choice = Read-MenuChoice
+        if ($choice -eq 'Escape') { return }
+        if ($choice -eq 'R' -and $Group -in @('HomeApps','HomeFiles')) { Invoke-SafeUiAction -Name 'Retry' -Root $Root -AdbPath $AdbPath -FastbootPath $FastbootPath; continue }
         $number = 0
-        if ([int]::TryParse([string]$key.KeyChar, [ref]$number) -and $number -ge 1 -and $number -le $visible.Count) {
-            return [string]$visible[$number - 1]
+        if ([int]::TryParse($choice,[ref]$number) -and $number -ge 1 -and $number -le $actions.Count) {
+            Invoke-SafeUiAction -Name $actions[$number-1] -Root $Root -AdbPath $AdbPath -FastbootPath $FastbootPath
+            try {
+                $latest = Read-State -Root $Root
+                if ($null -ne $latest) { $script:MenuState = $latest }
+            }
+            catch { Show-ActionError -Details $_.Exception.Message }
         }
     }
 }
 
 function Show-LeanAdbMenu {
-    param(
-        [string]$Root,
-        [object]$State
-    )
-    if (-not [Environment]::UserInteractive) {
-        throw 'The LeanADB menu requires an interactive console.'
-    }
-
-    $adb = Join-Path $Root 'bin\adb.exe'
-    $fastboot = Join-Path $Root 'bin\fastboot.exe'
-    $script:ActiveOutputFolder = Get-OutputFolder -Root $Root -State $State
-    foreach ($tool in @($adb, $fastboot)) {
-        if (-not (Test-Path -LiteralPath $tool -PathType Leaf)) {
-            throw "Required tool was not found: $tool"
-        }
-    }
-
+    param([string]$Root, [object]$State)
+    if (-not [Environment]::UserInteractive -or [Console]::IsInputRedirected) { throw 'The LeanADB menu requires an interactive console.' }
+    $adb = Join-Path $Root 'bin\adb.exe'; $fastboot = Join-Path $Root 'bin\fastboot.exe'
+    foreach ($tool in @($adb,$fastboot)) { if (-not (Test-Path -LiteralPath $tool -PathType Leaf)) { throw "Required tool was not found: $tool" } }
+    $script:PinDeviceSelection = $true; $script:MenuInstallRoot = $Root; $script:MenuState = $State
+    $items = @('HomeConnect','HomeApps','HomeFiles','HomeDevice','HomeTerminal','HomeSettings','HomeSaved')
+    $shortcuts = @{ C='Choose'; A='Alias'; S='ActionScreenshot'; W='ActionWireless'; R='ActionReceive'; L='ActionLogcat'; H='ActionDriver'; I='ActionSideload'; B='ActionReboot'; G='ActionLanguage'; D='ActionInfo' }
     while ($true) {
+        $refreshError = ''
+        try { $latest = Read-State -Root $Root; if ($null -ne $latest) { $script:MenuState = $latest } }
+        catch { $refreshError = $_.Exception.Message }
+        $State = $script:MenuState
+        $script:ActiveOutputFolder = Get-OutputFolder -Root $Root -State $State
         Clear-Host
-        Write-Host '=======================================================================' -ForegroundColor Cyan
-        Write-Host ("                         " + $script:Messages.MenuTitle) -ForegroundColor Cyan
-        Write-Host '                          by leodroid99' -ForegroundColor DarkCyan
-        Write-Host '=======================================================================' -ForegroundColor Cyan
-        $leanVersion = if ($null -ne $State.PSObject.Properties['LeanADBVersion']) { [string]$State.LeanADBVersion } else { $script:ProductVersion }
-        Write-Host (Format-Message -Name 'MenuVersion' -Values @($leanVersion, $State.InstalledVersion)) -ForegroundColor DarkGray
+        Write-Host '=================== LeanADB ===================' -ForegroundColor Cyan
+        Write-Host ('by leodroid99  |  ' + (Format-Message -Name 'MenuVersion' -Values @($State.LeanADBVersion,$State.InstalledVersion))) -ForegroundColor DarkGray
+        if ($refreshError) { Write-Host $refreshError -ForegroundColor Yellow; Write-Host $script:Messages.RepairMenuHint -ForegroundColor Yellow }
+        if ($script:SelectedDeviceSerial) {
+            $records = @(Get-AdbDeviceRecords -AdbPath $adb | Where-Object { $_.Serial -ceq $script:SelectedDeviceSerial } | Select-Object -First 1)
+            $name = Get-DeviceDisplayName -State $State -Serial $script:SelectedDeviceSerial
+            if ($records.Count) { Write-Host (Format-Message -Name 'MenuTargetSelected' -Values @($name,(Get-LocalizedDeviceStatus -Status $records[0].Status))) -ForegroundColor Cyan }
+            else { Write-Host (Format-Message -Name 'MenuTargetUnavailable' -Values @($name)) -ForegroundColor Yellow }
+        }
+        else {
+            Write-Host $script:Messages.MenuTargetNone -ForegroundColor DarkGray
+            if (@($State.RecentDevices).Count) { Write-Host (Format-Message -Name 'MenuRecentDevice' -Values @((Get-DeviceDisplayName -State $State -Serial $State.RecentDevices[0]))) -ForegroundColor DarkGray }
+        }
         Write-Host (Format-Message -Name 'OutputFolderCurrent' -Values @($script:ActiveOutputFolder)) -ForegroundColor DarkGray
-        if ($null -ne $State.PSObject.Properties['UpdateAvailable'] -and [bool]$State.UpdateAvailable) {
-            Write-Host $script:Messages.UpdateReady -ForegroundColor Yellow
-        }
-        if ($null -ne $State.PSObject.Properties['ProductUpdateAvailable'] -and [bool]$State.ProductUpdateAvailable) {
-            $availableVersion = if ($null -ne $State.PSObject.Properties['ProductUpdateVersion']) { [string]$State.ProductUpdateVersion } else { '' }
-            Write-Host (Format-Message -Name 'ProductUpdateReady' -Values @($availableVersion)) -ForegroundColor Yellow
-        }
-        if ($State.LastCheckStatus -eq 'Offline') {
-            Write-Host $script:Messages.OfflineZipStatus -ForegroundColor Yellow
-        }
+        if ($State.UpdateAvailable -or $State.ProductUpdateAvailable) { Write-Host $script:Messages.UpdateReady -ForegroundColor Yellow }
+        if (-not $State.PackageComparisonKnown) { Write-Host $script:Messages.OfflineZipStatus -ForegroundColor DarkGray }
+        if ($State.LastCheckStatus -eq 'Failed' -or ($null -ne $State.PSObject.Properties['ProductCheckStatus'] -and $State.ProductCheckStatus -eq 'Failed')) { Write-Host $script:Messages.CheckFailedHint -ForegroundColor Yellow }
         Write-Host ''
-        Write-Host "  $($script:Messages.MenuAdbDevices)" -ForegroundColor Green
-        Write-Host "  $($script:Messages.MenuFastbootDevices)"
-        Write-Host "  $($script:Messages.MenuInstallApk)"
-        Write-Host "  $($script:Messages.MenuPushFile)"
-        Write-Host "  $($script:Messages.MenuTerminal)"
-        Write-Host "  $($script:Messages.MenuUpdate)"
-        Write-Host "  $($script:Messages.MenuOpenFolder)"
-        Write-Host "  $($script:Messages.MenuScreenshot)"
-        Write-Host "  $($script:Messages.MenuWireless)"
-        Write-Host "  $($script:Messages.MenuReceive)"
-        Write-Host "  $($script:Messages.MenuLogcat)"
-        Write-Host "  $($script:Messages.MenuHelpTools)"
-        Write-Host "  $($script:Messages.MenuSideload)"
-        Write-Host "  $($script:Messages.MenuReboot)"
-        Write-Host "  $($script:Messages.MenuLanguage)"
-        Write-Host "  $($script:Messages.MenuDeviceInfo)"
-        Write-Host "  $($script:Messages.MenuExtras)"
+        for ($index = 0; $index -lt $items.Count; $index++) { Write-Host ('  [ {0} ] {1}' -f ($index+1),$script:Messages[$items[$index]]) }
         Write-Host ''
-        Write-Host "  $($script:Messages.MenuExit)" -ForegroundColor Yellow
-        Write-Host ''
-        Write-Host $script:Messages.MenuHelp -ForegroundColor DarkGray
-
-        $key = [Console]::ReadKey($true)
-        $choice = switch ($key.Key) {
-            'D1' { 1 }; 'NumPad1' { 1 }
-            'D2' { 2 }; 'NumPad2' { 2 }
-            'D3' { 3 }; 'NumPad3' { 3 }
-            'D4' { 4 }; 'NumPad4' { 4 }
-            'D5' { 5 }; 'NumPad5' { 5 }
-            'D6' { 6 }; 'NumPad6' { 6 }
-            'D7' { 7 }; 'NumPad7' { 7 }
-            'S' { 'Screenshot' }
-            'W' { 'Wireless' }
-            'R' { 'Receive' }
-            'L' { 'Logcat' }
-            'H' { 'Help' }
-            'I' { 'Sideload' }
-            'B' { 'Reboot' }
-            'G' { 'Language' }
-            'D' { 'DeviceInfo' }
-            'T' { 'Extras' }
-            'Q' { 0 }; 'Escape' { 0 }
-            default { -1 }
-        }
-
+        Write-Host $script:Messages.HomeShortcuts -ForegroundColor Yellow
+        $choice = Read-HomeChoice -Root $Root
         switch ($choice) {
-            0 { return }
-            1 {
-                Clear-Host
-                $records = @(Get-AdbDeviceRecords -AdbPath $adb)
-                if ($records.Count -eq 0) {
-                    Write-Host $script:Messages.NoReadyDevice -ForegroundColor Red
-                }
-                else {
-                    $records | Select-Object Serial, Model, @{ Name = 'Status'; Expression = { Get-LocalizedDeviceStatus -Status $_.Status } } | Format-Table -AutoSize
-                    if (@($records | Where-Object { $_.Status -ne 'device' }).Count -gt 0) {
-                        Write-Host $script:Messages.AdbDeviceHint -ForegroundColor Yellow
-                    }
-                }
-                Wait-ForMenuKey
-            }
-            2 {
-                Clear-Host
-                $previousPreference = $ErrorActionPreference
-                try {
-                    $ErrorActionPreference = 'Continue'
-                    & $fastboot devices
-                }
-                finally {
-                    $ErrorActionPreference = $previousPreference
-                }
-                Write-Host ''
-                Write-Host $script:Messages.FastbootDeviceHint -ForegroundColor Yellow
-                Wait-ForMenuKey
-            }
-            3 {
-                $serial = Select-AdbDevice -AdbPath $adb
-                if ($serial) {
-                    $files = @(Select-LocalFile -Title $script:Messages.ChooseApks -Filter 'Android packages (*.apk)|*.apk' -Multiple)
-                }
-                if ($serial -and $files.Count -eq 1) {
-                    Clear-Host
-                    Write-Host (Format-Message -Name 'InstallingApk' -Values @($files[0]))
-                    Invoke-MenuCommand -Executable $adb -Arguments @('-s', $serial, 'install', '-r', $files[0])
-                }
-                elseif ($serial -and $files.Count -gt 1) {
-                    Clear-Host
-                    $sdk = Get-AdbSdkLevel -AdbPath $adb -Serial $serial
-                    if ($sdk -gt 0 -and $sdk -lt 21) {
-                        Write-Host $script:Messages.SplitApkUnsupported -ForegroundColor Yellow
-                        Wait-ForMenuKey
-                    }
-                    else {
-                        Write-Host (Format-Message -Name 'InstallingApks' -Values @($files.Count, $serial))
-                        $arguments = @('-s', $serial, 'install-multiple', '-r') + $files
-                        Invoke-MenuCommand -Executable $adb -Arguments $arguments
-                    }
-                }
-            }
-            4 {
-                $serial = Select-AdbDevice -AdbPath $adb
-                if ($serial) {
-                    $files = @(Select-LocalFile -Title $script:Messages.ChooseFiles -Filter 'All files (*.*)|*.*' -Multiple)
-                }
-                if ($serial -and $files.Count) {
-                    Clear-Host
-                    Send-FilesToDevice -AdbPath $adb -Serial $serial -Paths $files
-                }
-            }
-            5 {
-                & $PSCommandPath -Action Terminal -InstallPath $Root
-                Write-Host ''
-                Write-Host $script:Messages.TerminalOpened -ForegroundColor Green
-                Wait-ForMenuKey
-            }
-            6 {
-                Clear-Host
-                & $PSCommandPath -Action Update -InstallPath $Root
-                Wait-ForMenuKey
-                $State = Read-State -Root $Root
-            }
-            7 { Start-Process -FilePath 'explorer.exe' -ArgumentList @($Root) }
-            'Screenshot' {
-                $serial = Select-AdbDevice -AdbPath $adb
-                if ($serial) {
-                    Clear-Host
-                    Save-AdbScreenshot -AdbPath $adb -Serial $serial
-                }
-            }
-            'Wireless' { Show-WirelessMenu -AdbPath $adb }
-            'Extras' {
-                Show-ExtrasMenu -Root $Root -AdbPath $adb -FastbootPath $fastboot
-                $State = Read-State -Root $Root
-            }
-            'Receive' {
-                $serial = Select-AdbDevice -AdbPath $adb
-                if ($serial) { Receive-AdbPath -AdbPath $adb -Serial $serial }
-            }
-            'Logcat' {
-                $serial = Select-AdbDevice -AdbPath $adb
-                if ($serial) {
-                    Clear-Host
-                    Save-AdbLogcat -AdbPath $adb -Serial $serial
-                }
-            }
-            'Help' { Show-ConnectionHelp -Root $Root -AdbPath $adb }
-            'Sideload' { Start-AdbSideload -AdbPath $adb }
-            'Reboot' { Show-RebootMenu -AdbPath $adb -FastbootPath $fastboot }
-            'Language' { Show-LanguageMenu -Root $Root }
-            'DeviceInfo' { Show-DeviceInfo -AdbPath $adb }
+            { $_ -in @('Q','Escape') } { return }
+            'Refresh' { continue }
+            '1' { Invoke-SafeUiAction -Name 'Connect' -Root $Root -AdbPath $adb -FastbootPath $fastboot }
+            '2' { Show-TaskGroup -Group 'HomeApps' -Root $Root -AdbPath $adb -FastbootPath $fastboot }
+            '3' { Show-TaskGroup -Group 'HomeFiles' -Root $Root -AdbPath $adb -FastbootPath $fastboot }
+            '4' { Show-TaskGroup -Group 'HomeDevice' -Root $Root -AdbPath $adb -FastbootPath $fastboot }
+            '5' { Invoke-SafeUiAction -Name 'Terminal' -Root $Root -AdbPath $adb -FastbootPath $fastboot }
+            '6' { Show-TaskGroup -Group 'HomeSettings' -Root $Root -AdbPath $adb -FastbootPath $fastboot }
+            '7' { Invoke-SafeUiAction -Name 'HomeSaved' -Root $Root -AdbPath $adb -FastbootPath $fastboot }
+            'T' { Show-TaskGroup -Group 'HomeFiles' -Root $Root -AdbPath $adb -FastbootPath $fastboot }
+            default { if ($shortcuts.ContainsKey($choice)) { Invoke-SafeUiAction -Name $shortcuts[$choice] -Root $Root -AdbPath $adb -FastbootPath $fastboot } }
         }
     }
 }
@@ -2230,6 +2941,101 @@ function Get-PlatformToolsVersion {
         throw 'source.properties does not contain Pkg.Revision.'
     }
     return ($line -split '=', 2)[1].Trim()
+}
+
+function Get-ValidatedInstalledPlatformToolsVersion {
+    param([string]$Root)
+    $binPath = Join-Path $Root 'bin'
+    foreach ($name in $script:RequiredFiles) {
+        $candidate = Join-Path $binPath $name
+        if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+            throw "LeanADB repair cannot find required Platform-Tools file: $name"
+        }
+    }
+    Assert-GoogleSignature -FilePath (Join-Path $binPath 'adb.exe')
+    Assert-GoogleSignature -FilePath (Join-Path $binPath 'fastboot.exe')
+    $version = Get-PlatformToolsVersion -PlatformToolsPath $binPath
+    $adbOutput = (& (Join-Path $binPath 'adb.exe') version 2>&1 | Out-String)
+    $adbExitCode = $LASTEXITCODE
+    $fastbootOutput = (& (Join-Path $binPath 'fastboot.exe') --version 2>&1 | Out-String)
+    $fastbootExitCode = $LASTEXITCODE
+    if ($adbExitCode -ne 0 -or $fastbootExitCode -ne 0 -or
+        $adbOutput -notmatch [regex]::Escape($version) -or $fastbootOutput -notmatch [regex]::Escape($version)) {
+        throw "Installed executable versions do not match Platform-Tools revision $version."
+    }
+    return $version
+}
+
+function Test-UserPathEntry {
+    param([string]$BinPath)
+    $target = [IO.Path]::GetFullPath($BinPath).TrimEnd('\\')
+    $current = [Environment]::GetEnvironmentVariable('Path', 'User')
+    if (-not $current) { return $false }
+    foreach ($entry in @($current -split ';')) {
+        if (-not $entry) { continue }
+        try {
+            $expanded = [Environment]::ExpandEnvironmentVariables($entry.Trim().Trim('"'))
+            if ([IO.Path]::GetFullPath($expanded).TrimEnd('\\') -ieq $target) { return $true }
+        }
+        catch { }
+    }
+    return $false
+}
+
+function Test-StartMenuShortcutForRoot {
+    param([string]$Root)
+    $shortcutPath = Get-ShortcutPath
+    if (-not (Test-Path -LiteralPath $shortcutPath -PathType Leaf)) { return $false }
+    try {
+        $shell = New-Object -ComObject WScript.Shell
+        $shortcut = $shell.CreateShortcut($shortcutPath)
+        $target = [IO.Path]::GetFullPath([string]$shortcut.TargetPath)
+        $expected = [IO.Path]::GetFullPath((Join-Path $Root 'Open LeanADB.cmd'))
+        return $target -ieq $expected
+    }
+    catch { return $false }
+}
+
+function New-RecoveredState {
+    param([string]$Root)
+    $binPath = Join-Path $Root 'bin'
+    $platformVersion = Get-ValidatedInstalledPlatformToolsVersion -Root $Root
+    $productSignature = Get-AuthenticodeSignature -LiteralPath (Join-Path $Root 'LeanADB.ps1')
+    $pathRegistered = Test-UserPathEntry -BinPath $binPath
+    $shortcutRegistered = Test-StartMenuShortcutForRoot -Root $Root
+    return [pscustomobject][ordered]@{
+        ProductId = $script:ProductId
+        Publisher = 'leodroid99'
+        LeanADBVersion = $script:ProductVersion
+        InstalledVersion = $platformVersion
+        InstalledAtUtc = ''
+        UpdatedAtUtc = [DateTime]::UtcNow.ToString('o')
+        LastCheckUtc = ''
+        SourceUrl = $script:SourceUrl
+        ETag = ''
+        LastModified = ''
+        ContentLength = ''
+        ZipSha256 = ''
+        LayoutVersion = 1
+        LastCheckStatus = 'Recovered'
+        PackageComparisonKnown = $false
+        StateSchemaVersion = 2
+        UpdateAvailable = $false
+        PathRegistered = $pathRegistered
+        ShortcutRegistered = $shortcutRegistered
+        UninstallRegistered = ($pathRegistered -or $shortcutRegistered)
+        LicenseAcceptedUtc = ''
+        LicenseUrl = $script:LicenseUrl
+        ProductManifestUrl = $script:ProductManifestUrl
+        UsbBackend = 'Standard'
+        LanguagePreference = 'Auto'
+        OutputFolder = ''
+        DeviceAliases = @()
+        RecentDevices = @()
+        ProductUpdateAvailable = $false
+        ProductSigned = ($productSignature.Status -eq 'Valid')
+        ProductSignerSubject = if ($productSignature.Status -eq 'Valid') { [string]$productSignature.SignerCertificate.Subject } else { '' }
+    }
 }
 
 function Assert-GoogleSignature {
@@ -2248,16 +3054,11 @@ function Stop-AdbServer {
     if (-not (Test-Path -LiteralPath $AdbPath -PathType Leaf)) {
         return
     }
-    $previousPreference = $ErrorActionPreference
     try {
-        $ErrorActionPreference = 'SilentlyContinue'
-        & $AdbPath kill-server 2>&1 | Out-Null
+        [void](Invoke-ToolProcess -Executable $AdbPath -Arguments @('kill-server') -TimeoutSeconds 15 -QuietProgress)
     }
     catch {
         # No running server is a valid state during update and uninstall.
-    }
-    finally {
-        $ErrorActionPreference = $previousPreference
     }
 }
 
@@ -2337,17 +3138,13 @@ function Set-UserPathEntry {
         }
         if ($Present -and [IO.Path]::GetFileName($normalizedEntry) -ieq 'bin') {
             $candidateRoot = Split-Path -Parent $normalizedEntry
-            $candidateState = Join-Path $candidateRoot 'state.json'
-            if (Test-Path -LiteralPath $candidateState -PathType Leaf) {
-                try {
-                    $candidateProduct = (Get-Content -LiteralPath $candidateState -Raw -Encoding UTF8 | ConvertFrom-Json).ProductId
-                    if ($candidateProduct -eq $script:ProductId) {
-                        continue
-                    }
+            try {
+                if ($null -ne (Read-State -Root $candidateRoot)) {
+                    continue
                 }
-                catch {
-                    # Preserve an entry if ownership cannot be proven.
-                }
+            }
+            catch {
+                # Preserve an entry if ownership cannot be proven.
             }
         }
         $filtered += $entry
@@ -2469,26 +3266,46 @@ function Write-Launchers {
     $menu = @'
 @echo off
 setlocal EnableExtensions DisableDelayedExpansion
+set "PSModulePath="
 title LeanADB Easy Menu
 start "" /b powershell.exe -NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "%~dp0LeanADB.ps1" -Action AutoUpdate -InstallPath "%~dp0." -Quiet
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0LeanADB.ps1" -Action Menu -InstallPath "%~dp0."
-if errorlevel 1 pause
+set "LEANADB_EXIT_CODE=%ERRORLEVEL%"
+if not "%LEANADB_EXIT_CODE%"=="0" pause
+exit /b %LEANADB_EXIT_CODE%
 '@
     $terminal = @'
 @echo off
 setlocal EnableExtensions DisableDelayedExpansion
+set "PSModulePath="
 start "" /b powershell.exe -NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "%~dp0LeanADB.ps1" -Action AutoUpdate -InstallPath "%~dp0." -Quiet
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0LeanADB.ps1" -Action Terminal -InstallPath "%~dp0."
-if errorlevel 1 pause
+set "LEANADB_EXIT_CODE=%ERRORLEVEL%"
+if not "%LEANADB_EXIT_CODE%"=="0" pause
+exit /b %LEANADB_EXIT_CODE%
 '@
     $update = @'
 @echo off
+setlocal EnableExtensions DisableDelayedExpansion
+set "PSModulePath="
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0LeanADB.ps1" -Action Update -InstallPath "%~dp0."
-if errorlevel 1 pause
+set "LEANADB_EXIT_CODE=%ERRORLEVEL%"
+if not "%LEANADB_EXIT_CODE%"=="0" pause
+exit /b %LEANADB_EXIT_CODE%
+'@
+    $repair = @'
+@echo off
+setlocal EnableExtensions DisableDelayedExpansion
+set "PSModulePath="
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0LeanADB.ps1" -Action Repair -InstallPath "%~dp0."
+set "LEANADB_EXIT_CODE=%ERRORLEVEL%"
+if not "%LEANADB_EXIT_CODE%"=="0" pause
+exit /b %LEANADB_EXIT_CODE%
 '@
     $uninstall = @'
 @echo off
 setlocal EnableExtensions DisableDelayedExpansion
+set "PSModulePath="
 if /I "%~1"=="/quiet" (
   powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0LeanADB.ps1" -Action Uninstall -InstallPath "%~dp0." -Quiet
 ) else (
@@ -2500,9 +3317,12 @@ exit /b %LEANADB_EXIT_CODE%
     $drop = @'
 @echo off
 setlocal EnableExtensions DisableDelayedExpansion
+set "PSModulePath="
 title LeanADB Drag and Drop
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0LeanADB-Drop.ps1" %*
-if errorlevel 1 pause
+set "LEANADB_EXIT_CODE=%ERRORLEVEL%"
+if not "%LEANADB_EXIT_CODE%"=="0" pause
+exit /b %LEANADB_EXIT_CODE%
 '@
     $dropBridge = @'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -2512,6 +3332,7 @@ if ($LASTEXITCODE) { exit $LASTEXITCODE }
     Set-Content -LiteralPath (Join-Path $Root 'Open LeanADB.cmd') -Value $menu -Encoding ASCII
     Set-Content -LiteralPath (Join-Path $Root 'Open LeanADB Terminal.cmd') -Value $terminal -Encoding ASCII
     Set-Content -LiteralPath (Join-Path $Root 'Update LeanADB.cmd') -Value $update -Encoding ASCII
+    Set-Content -LiteralPath (Join-Path $Root 'Repair LeanADB.cmd') -Value $repair -Encoding ASCII
     Set-Content -LiteralPath (Join-Path $Root 'Uninstall LeanADB.cmd') -Value $uninstall -Encoding ASCII
     Set-Content -LiteralPath (Join-Path $Root 'Drop files on LeanADB.cmd') -Value $drop -Encoding ASCII
     Set-Content -LiteralPath (Join-Path $Root 'LeanADB-Drop.ps1') -Value $dropBridge -Encoding ASCII
@@ -2608,8 +3429,15 @@ function Install-Package {
     Assert-FreeDiskSpace -Path $Root
     $workRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('LeanADB-' + [guid]::NewGuid().ToString('N'))
     $updateMutex = Enter-UpdateLock -Root $Root
+    $snapshot = $null
+    $newBin = ''; $oldBin = ''; $binSwapped = $false; $hadOldBin = $false
+    $preserveBackup = $false
+    $committed = $false
     try {
+        $ExistingState = Read-State -Root $Root
+        if ($null -ne $ExistingState -and $null -ne $ExistingState.PSObject.Properties['PendingRemovalId'] -and $ExistingState.PendingRemovalId) { throw $script:Messages.RemovalPending }
         New-Item -ItemType Directory -Path $workRoot | Out-Null
+        $snapshot = New-InstallSnapshot -Root $Root -BackupRoot (Join-Path $workRoot 'snapshot') -Integration:($RegisterPath -or $RegisterShortcut)
         $zipPath = Join-Path $workRoot 'platform-tools.zip'
         if ($LocalZipPath) {
             Copy-Item -LiteralPath $LocalZipPath -Destination $zipPath -ErrorAction Stop
@@ -2647,16 +3475,13 @@ function Install-Package {
                 Move-Item -LiteralPath $binPath -Destination $oldBin
             }
             Move-Item -LiteralPath $newBin -Destination $binPath
+            $binSwapped = $true
         }
         catch {
             if ((-not (Test-Path -LiteralPath $binPath)) -and (Test-Path -LiteralPath $oldBin)) {
                 Move-Item -LiteralPath $oldBin -Destination $binPath
             }
             throw
-        }
-
-        if (Test-Path -LiteralPath $oldBin) {
-            Remove-Item -LiteralPath $oldBin -Recurse -Force
         }
 
         Copy-ProductFiles -Root $Root
@@ -2678,6 +3503,12 @@ function Install-Package {
         if ($null -ne $ExistingState -and $ExistingState.InstalledAtUtc) {
             $installedAtUtc = [string]$ExistingState.InstalledAtUtc
         }
+        $deviceAliases = @()
+        $recentDevices = @()
+        if ($null -ne $ExistingState) {
+            if ($null -ne $ExistingState.PSObject.Properties['DeviceAliases']) { $deviceAliases = @($ExistingState.DeviceAliases) }
+            if ($null -ne $ExistingState.PSObject.Properties['RecentDevices']) { $recentDevices = @($ExistingState.RecentDevices) }
+        }
         $productSignature = Get-AuthenticodeSignature -LiteralPath (Join-Path $Root 'LeanADB.ps1')
 
         $state = [ordered]@{
@@ -2695,6 +3526,8 @@ function Install-Package {
             ZipSha256          = $zipHash
             LayoutVersion      = 1
             LastCheckStatus    = if ($LocalZipPath) { 'Offline' } else { 'Success' }
+            PackageComparisonKnown = (-not $LocalZipPath -and $null -ne $RemoteMetadata -and [bool]($RemoteMetadata.ETag -or $RemoteMetadata.LastModified))
+            StateSchemaVersion = 2
             UpdateAvailable    = $false
             PathRegistered     = $RegisterPath
             ShortcutRegistered = $RegisterShortcut
@@ -2705,11 +3538,18 @@ function Install-Package {
             UsbBackend = if ($null -ne $ExistingState -and $null -ne $ExistingState.PSObject.Properties['UsbBackend'] -and $ExistingState.UsbBackend -eq 'Legacy') { 'Legacy' } else { 'Standard' }
             LanguagePreference = if ($Language -ne 'Auto') { $Language } elseif ($null -ne $ExistingState -and $null -ne $ExistingState.PSObject.Properties['LanguagePreference']) { [string]$ExistingState.LanguagePreference } else { 'Auto' }
             OutputFolder = if ($null -ne $ExistingState -and $null -ne $ExistingState.PSObject.Properties['OutputFolder']) { [string]$ExistingState.OutputFolder } else { '' }
+            DeviceAliases = $deviceAliases
+            RecentDevices = $recentDevices
             ProductUpdateAvailable = $false
             ProductSigned       = ($productSignature.Status -eq 'Valid')
             ProductSignerSubject = if ($productSignature.Status -eq 'Valid') { [string]$productSignature.SignerCertificate.Subject } else { '' }
         }
         Write-State -Root $Root -State $state
+        $committed = $true
+        if (Test-Path -LiteralPath $oldBin) {
+            try { Remove-Item -LiteralPath $oldBin -Recurse -Force }
+            catch { Write-Warning "Updated successfully; old tools could not be removed: $oldBin" }
+        }
         Write-Info (Format-Message -Name 'InstalledVersion' -Values @($package.Version))
         Write-Info (Format-Message -Name 'InstallationFolder' -Values @($Root))
         if ($RegisterPath) {
@@ -2721,10 +3561,25 @@ function Install-Package {
         }
         return $state
     }
+    catch {
+        $originalError = $_
+        if ($committed) { throw $originalError }
+        try {
+            if ($binSwapped) {
+                if (Test-Path -LiteralPath (Join-Path $Root 'bin')) { Remove-Item -LiteralPath (Join-Path $Root 'bin') -Recurse -Force }
+                if ($hadOldBin -and (Test-Path -LiteralPath $oldBin)) { Move-Item -LiteralPath $oldBin -Destination (Join-Path $Root 'bin') }
+            }
+            if ($null -ne $snapshot) { Restore-InstallSnapshot -Root $Root -Snapshot $snapshot }
+        }
+        catch { $preserveBackup = $true; throw "Installation failed: $($originalError.Exception.Message) $($_.Exception.Message) Backup: $workRoot; previous tools: $oldBin" }
+        throw $originalError
+    }
     finally {
         try {
-            if (Test-Path -LiteralPath $workRoot) {
-                Remove-Item -LiteralPath $workRoot -Recurse -Force
+            if ($newBin -and (Test-Path -LiteralPath $newBin)) { Remove-Item -LiteralPath $newBin -Recurse -Force }
+            if (-not $preserveBackup -and (Test-Path -LiteralPath $workRoot)) {
+                try { Remove-Item -LiteralPath $workRoot -Recurse -Force }
+                catch { if (-not $committed) { throw }; Write-Warning "Installation succeeded; temporary files remain at $workRoot" }
             }
         }
         finally {
@@ -2767,6 +3622,17 @@ function Convert-ToBinLayout {
     return $State
 }
 
+function Get-UpdateChecks {
+    $result = [pscustomobject]@{ Remote = $null; Manifest = $null; ToolsStatus = 'Failed'; ProductStatus = 'NotConfigured'; ToolsError = ''; ProductError = '' }
+    try { $result.Remote = Get-RemoteMetadata; $result.ToolsStatus = 'Success' }
+    catch { $result.ToolsError = $_.Exception.Message }
+    if ($script:ProductManifestUrl) {
+        try { $result.Manifest = Get-ProductManifest -ManifestUrl $script:ProductManifestUrl; $result.ProductStatus = 'Success' }
+        catch { $result.ProductStatus = 'Failed'; $result.ProductError = $_.Exception.Message }
+    }
+    return $result
+}
+
 function Test-CheckDue {
     param([object]$State)
     if ($Force) {
@@ -2775,7 +3641,7 @@ function Test-CheckDue {
     try {
         $lastCheck = [DateTime]::Parse([string]$State.LastCheckUtc).ToUniversalTime()
         $interval = $script:CheckIntervalHours
-        if ($null -ne $State.PSObject.Properties['LastCheckStatus'] -and $State.LastCheckStatus -eq 'Failed') {
+        if ($State.LastCheckStatus -eq 'Failed' -or ($null -ne $State.PSObject.Properties['ProductCheckStatus'] -and $State.ProductCheckStatus -eq 'Failed')) {
             $interval = $script:FailedCheckBackoffHours
         }
         return ([DateTime]::UtcNow - $lastCheck).TotalHours -ge $interval
@@ -2849,12 +3715,27 @@ function Confirm-LeanAdbUninstall {
 }
 
 function Start-DeferredRemoval {
-    param([string]$Root)
+    param([string]$Root, [string]$RemovalId)
     $escapedRoot = $Root.Replace("'", "''")
+    $rootBytes = [Text.Encoding]::UTF8.GetBytes($Root.ToLowerInvariant())
+    $hash = [Security.Cryptography.SHA256]::Create()
+    try { $lockId = ([BitConverter]::ToString($hash.ComputeHash($rootBytes))).Replace('-', '').Substring(0,20) }
+    finally { $hash.Dispose() }
     $cleanupCommand = @"
 Start-Sleep -Milliseconds 1000
 `$target = '$escapedRoot'
 `$lastError = ''
+`$mutex = New-Object Threading.Mutex(`$false, 'Local\LeanADB-$lockId')
+`$acquired = `$false
+try {
+try { `$acquired = `$mutex.WaitOne(30000) } catch [Threading.AbandonedMutexException] { `$acquired = `$true }
+if (-not `$acquired) { throw 'Uninstall is waiting for another operation.' }
+`$statePath = Join-Path `$target 'state.json'
+if (-not (Test-Path -LiteralPath `$statePath -PathType Leaf)) { return }
+`$state = Get-Content -LiteralPath `$statePath -Raw -Encoding UTF8 | ConvertFrom-Json
+if (`$state.ProductId -ne 'LeanADB' -or `$state.PendingRemovalId -ne '$RemovalId') { return }
+# Validate once while holding the same mutex as installation. Partial removal
+# can delete state.json before a locked file is retried; keep the lock throughout.
 for (`$attempt = 0; `$attempt -lt 30; `$attempt++) {
     try {
         if (Test-Path -LiteralPath `$target) {
@@ -2871,6 +3752,7 @@ if (Test-Path -LiteralPath `$target) {
     `$logPath = Join-Path ([IO.Path]::GetTempPath()) 'LeanADB-uninstall-error.log'
     "LeanADB could not remove `$target. `$lastError" | Set-Content -LiteralPath `$logPath -Encoding UTF8
 }
+} finally { if (`$acquired) { `$mutex.ReleaseMutex() }; `$mutex.Dispose() }
 "@
     $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cleanupCommand))
     Start-Process -FilePath 'powershell.exe' -ArgumentList @(
@@ -2917,12 +3799,22 @@ if ($Action -eq 'Install') {
 
 $InstallPath = Get-NormalizedInstallPath -Path $InstallPath
 Assert-SafeInstallPath -Root $InstallPath
-$state = Read-State -Root $InstallPath
+$state = $null
+try {
+    $state = Read-State -Root $InstallPath
+}
+catch {
+    if ($Action -ne 'Repair') { throw }
+    # Repair can rebuild state when both primary and backup are unreadable.
+}
 if ($null -ne $state -and $null -ne $state.PSObject.Properties['UsbBackend'] -and $state.UsbBackend -eq 'Legacy') {
     $env:ADB_USB_LEGACY = '1'
 }
 elseif ($null -ne $state) {
     Remove-Item Env:ADB_USB_LEGACY -ErrorAction SilentlyContinue
+}
+if ($null -ne $state -and $null -ne $state.PSObject.Properties['PendingRemovalId'] -and $state.PendingRemovalId -and $Action -notin @('Uninstall','Status','FailureHelp')) {
+    throw $script:Messages.RemovalPending
 }
 if ($Language -eq 'Auto' -and $null -ne $state -and
     $null -ne $state.PSObject.Properties['LanguagePreference'] -and
@@ -2945,7 +3837,7 @@ if (-not $script:ProductManifestUrl -and $null -ne $state -and
     $null -ne $state.PSObject.Properties['ProductManifestUrl'] -and $state.ProductManifestUrl) {
     $script:ProductManifestUrl = [string]$state.ProductManifestUrl
 }
-if ($null -ne $state -and $Action -ne 'Uninstall') {
+if ($null -ne $state -and $Action -notin @('Uninstall', 'Repair')) {
     $state = Convert-ToBinLayout -Root $InstallPath -State $state
 }
 
@@ -3022,14 +3914,18 @@ switch ($Action) {
         if (-not $script:ProductManifestUrl) {
             Write-Info $script:Messages.ProductUpdatesNotConfigured
         }
-        if ($script:ProductManifestUrl) {
-            $productManifest = Get-ProductManifest -ManifestUrl $script:ProductManifestUrl
+        if ($script:ProductManifestUrl -and -not $SkipProductUpdate) {
+            $productManifest = $null
+            try { $productManifest = Get-ProductManifest -ManifestUrl $script:ProductManifestUrl }
+            catch { Write-Warning (Format-Message -Name 'ProductCheckFailed' -Values @($_.Exception.Message)) }
             $currentProductVersion = if ($null -ne $state.PSObject.Properties['LeanADBVersion']) { [string]$state.LeanADBVersion } else { $script:ProductVersion }
-            if (Test-NewerProductVersion -Current $currentProductVersion -Candidate ([string]$productManifest.Version)) {
+            if ($null -ne $productManifest -and (Test-NewerProductVersion -Current $currentProductVersion -Candidate ([string]$productManifest.Version))) {
                 Write-Info (Format-Message -Name 'ProductUpdating' -Values @($productManifest.Version))
                 Install-ProductUpdate -Root $InstallPath -ManifestUrl $script:ProductManifestUrl -Manifest $productManifest
                 Write-Info (Format-Message -Name 'ProductUpdated' -Values @($productManifest.Version))
-                $state = Read-State -Root $InstallPath
+                & (Join-Path $InstallPath 'LeanADB.ps1') -Action Update -InstallPath $InstallPath -SkipProductUpdate -Force:$Force -Quiet:$Quiet -Language $Language
+                if ($LASTEXITCODE -ne 0) { throw 'Platform-Tools update failed after the LeanADB update.' }
+                break
             }
         }
         $remote = Get-RemoteMetadata
@@ -3061,30 +3957,26 @@ switch ($Action) {
             if ($null -eq $state -or -not (Test-CheckDue -State $state)) {
                 break
             }
-            $remote = Get-RemoteMetadata
-            if ($state.LastCheckStatus -eq 'Offline') {
-                $state | Add-Member -NotePropertyName UpdateAvailable -NotePropertyValue $false -Force
-            }
-            elseif (Test-RemoteChanged -State $state -RemoteMetadata $remote) {
-                $state | Add-Member -NotePropertyName UpdateAvailable -NotePropertyValue $true -Force
-                $state | Add-Member -NotePropertyName PendingETag -NotePropertyValue $remote.ETag -Force
-                $state | Add-Member -NotePropertyName PendingLastModified -NotePropertyValue $remote.LastModified -Force
-            }
-            else {
-                $state | Add-Member -NotePropertyName UpdateAvailable -NotePropertyValue $false -Force
-            }
-            if ($script:ProductManifestUrl) {
-                $productManifest = Get-ProductManifest -ManifestUrl $script:ProductManifestUrl
-                $currentProductVersion = if ($null -ne $state.PSObject.Properties['LeanADBVersion']) { [string]$state.LeanADBVersion } else { $script:ProductVersion }
-                $productUpdateAvailable = Test-NewerProductVersion -Current $currentProductVersion -Candidate ([string]$productManifest.Version)
-                $state | Add-Member -NotePropertyName ProductUpdateAvailable -NotePropertyValue $productUpdateAvailable -Force
-                $state | Add-Member -NotePropertyName ProductUpdateVersion -NotePropertyValue ([string]$productManifest.Version) -Force
-            }
             $state.LastCheckUtc = [DateTime]::UtcNow.ToString('o')
-            $newCheckStatus = if ($state.LastCheckStatus -eq 'Offline') { 'Offline' } else { 'Success' }
-            $state | Add-Member -NotePropertyName LastCheckStatus -NotePropertyValue $newCheckStatus -Force
-            if ($null -ne $state.PSObject.Properties['LastCheckError']) {
-                $state.PSObject.Properties.Remove('LastCheckError')
+            Write-State -Root $InstallPath -State $state
+            Exit-UpdateLock -Mutex $checkMutex
+            $checkMutex = $null
+            $checks = Get-UpdateChecks
+            $checkMutex = Enter-UpdateLock -Root $InstallPath
+            $state = Read-State -Root $InstallPath
+            if ($null -eq $state) { break }
+            if ($checks.ToolsStatus -eq 'Success') {
+                $available = [bool]$state.PackageComparisonKnown -and (Test-RemoteChanged -State $state -RemoteMetadata $checks.Remote)
+                $state | Add-Member -NotePropertyName UpdateAvailable -NotePropertyValue $available -Force
+            }
+            $state | Add-Member -NotePropertyName LastCheckStatus -NotePropertyValue $checks.ToolsStatus -Force
+            $state | Add-Member -NotePropertyName LastCheckError -NotePropertyValue $checks.ToolsError -Force
+            $state | Add-Member -NotePropertyName ProductCheckStatus -NotePropertyValue $checks.ProductStatus -Force
+            $state | Add-Member -NotePropertyName ProductCheckError -NotePropertyValue $checks.ProductError -Force
+            if ($checks.ProductStatus -eq 'Success') {
+                $version = if ($null -ne $state.PSObject.Properties['LeanADBVersion']) { [string]$state.LeanADBVersion } else { $script:ProductVersion }
+                $state | Add-Member -NotePropertyName ProductUpdateAvailable -NotePropertyValue (Test-NewerProductVersion -Current $version -Candidate $checks.Manifest.Version) -Force
+                $state | Add-Member -NotePropertyName ProductUpdateVersion -NotePropertyValue ([string]$checks.Manifest.Version) -Force
             }
             Write-State -Root $InstallPath -State $state
         }
@@ -3107,8 +3999,9 @@ switch ($Action) {
         if ($null -eq $state) {
             throw (Format-Message -Name 'NotInstalled' -Values @($InstallPath))
         }
-        if ($script:ProductManifestUrl) {
-            $productManifest = Get-ProductManifest -ManifestUrl $script:ProductManifestUrl
+        $checks = Get-UpdateChecks
+        if ($checks.ProductStatus -eq 'Success') {
+            $productManifest = $checks.Manifest
             $currentProductVersion = if ($null -ne $state.PSObject.Properties['LeanADBVersion']) { [string]$state.LeanADBVersion } else { $script:ProductVersion }
             if (Test-NewerProductVersion -Current $currentProductVersion -Candidate ([string]$productManifest.Version)) {
                 Write-Info (Format-Message -Name 'ProductUpdateReady' -Values @($productManifest.Version))
@@ -3117,11 +4010,13 @@ switch ($Action) {
                 Write-Info (Format-Message -Name 'ProductUpToDate' -Values @($currentProductVersion))
             }
         }
-        else {
+        elseif ($checks.ProductStatus -eq 'NotConfigured') {
             Write-Info $script:Messages.ProductUpdatesNotConfigured
         }
-        $remote = Get-RemoteMetadata
-        if ($state.LastCheckStatus -eq 'Offline') {
+        else { Write-Warning (Format-Message -Name 'ProductCheckFailed' -Values @($checks.ProductError)) }
+        if ($checks.ToolsStatus -eq 'Failed') { Write-Warning (Format-Message -Name 'ToolsCheckFailed' -Values @($checks.ToolsError)); break }
+        $remote = $checks.Remote
+        if (-not $state.PackageComparisonKnown) {
             Write-Info $script:Messages.OfflineZipStatus
         }
         elseif (Test-RemoteChanged -State $state -RemoteMetadata $remote) {
@@ -3147,7 +4042,7 @@ switch ($Action) {
             PlatformTools    = $state.InstalledVersion
             LastUpdateCheck  = $state.LastCheckUtc
             UpdateAvailable  = $statusUpdateAvailable
-            OnlineComparisonKnown = $state.LastCheckStatus -ne 'Offline'
+            OnlineComparisonKnown = $state.PackageComparisonKnown
             LeanADBUpdate    = $statusProductUpdate
             LeanADBSigned    = $statusProductSigned
             UpdateManifest   = $script:ProductManifestUrl
@@ -3240,12 +4135,42 @@ switch ($Action) {
         Write-Info (Format-Message -Name 'ProductUpdated' -Values @($productManifest.Version))
     }
     'Repair' {
-        if ($null -eq $state) {
-            throw (Format-Message -Name 'NotInstalled' -Values @($InstallPath))
+        $repairMutex = Enter-UpdateLock -Root $InstallPath
+        try {
+            $state = $null
+            try { $state = Read-State -Root $InstallPath }
+            catch { $state = $null }
+            $recoveredFromBackup = $script:StateRecoveredFromBackup
+            if ($null -eq $state) {
+                if (-not (Test-Path -LiteralPath (Join-Path $InstallPath 'LeanADB.ps1') -PathType Leaf)) {
+                    throw (Format-Message -Name 'NotInstalled' -Values @($InstallPath))
+                }
+                $state = New-RecoveredState -Root $InstallPath
+                Write-State -Root $InstallPath -State $state
+                Write-Info $script:Messages.RepairRebuiltState
+            }
+            else {
+                $state = Convert-ToBinLayout -Root $InstallPath -State $state
+                $installedVersion = Get-ValidatedInstalledPlatformToolsVersion -Root $InstallPath
+                if ([string]$state.InstalledVersion -ne $installedVersion) {
+                    $state | Add-Member -NotePropertyName InstalledVersion -NotePropertyValue $installedVersion -Force
+                    $state | Add-Member -NotePropertyName LastCheckStatus -NotePropertyValue 'Recovered' -Force
+                    $state | Add-Member -NotePropertyName PackageComparisonKnown -NotePropertyValue $false -Force
+                    foreach ($field in @('ETag', 'LastModified', 'ContentLength', 'ZipSha256')) {
+                        $state | Add-Member -NotePropertyName $field -NotePropertyValue '' -Force
+                    }
+                }
+                Write-State -Root $InstallPath -State $state
+                if ($recoveredFromBackup) { Write-Info $script:Messages.RepairRecoveredBackup }
+            }
+            Write-Launchers -Root $InstallPath
+            if ([bool]$state.PathRegistered) { Set-UserPathEntry -BinPath (Join-Path $InstallPath 'bin') -Present $true }
+            if ([bool]$state.ShortcutRegistered) { Set-StartMenuShortcut -Root $InstallPath -Present $true }
+            if ([bool]$state.PathRegistered -or [bool]$state.ShortcutRegistered) { Set-UninstallRegistration -Root $InstallPath -Present $true }
+            [void](Read-StateFile -Path (Get-StatePath -Root $InstallPath))
+            Write-Info $script:Messages.RepairCompleted
         }
-        Write-Launchers -Root $InstallPath
-        if ([bool]$state.ShortcutRegistered) { Set-StartMenuShortcut -Root $InstallPath -Present $true }
-        if ([bool]$state.PathRegistered -or [bool]$state.ShortcutRegistered) { Set-UninstallRegistration -Root $InstallPath -Present $true }
+        finally { Exit-UpdateLock -Mutex $repairMutex }
     }
     'FailureHelp' {
         Write-Host "[LeanADB] $($script:Messages.InstallFailed)" -ForegroundColor Red
@@ -3291,7 +4216,15 @@ switch ($Action) {
             Set-UninstallRegistration -Root $InstallPath -Present $false
             $scriptDirectory = if ($PSCommandPath) { Get-NormalizedInstallPath -Path (Split-Path -Parent $PSCommandPath) } else { '' }
             if ($scriptDirectory -ieq $InstallPath) {
-                Start-DeferredRemoval -Root $InstallPath
+                $removalId = [guid]::NewGuid().ToString('N')
+                $installedState | Add-Member -NotePropertyName PendingRemovalId -NotePropertyValue $removalId -Force
+                Write-State -Root $InstallPath -State $installedState
+                try { Start-DeferredRemoval -Root $InstallPath -RemovalId $removalId }
+                catch {
+                    $installedState.PSObject.Properties.Remove('PendingRemovalId')
+                    Write-State -Root $InstallPath -State $installedState
+                    throw
+                }
                 Write-Info $script:Messages.UninstalledDeferred
             }
             else {
@@ -3308,3 +4241,5 @@ switch ($Action) {
 if ($script:ShowInteractiveCompletion -and $Action -eq 'Install') {
     Show-InstallCompletion -Root $InstallPath
 }
+if ($Action -eq 'Drop' -and $script:AnyBatchFailure) { exit 1 }
+$global:LASTEXITCODE = 0

@@ -4,6 +4,8 @@ LeanADB is a small Windows installer and launcher for Google's official Android 
 
 Created by **leodroid99**.
 
+Download the latest bootstrap ZIP from [GitHub Releases](https://github.com/leodroid99/LeanADB/releases/latest), extract it, and run `Install.cmd`. Google binaries are not bundled; the installer downloads them separately after license acceptance.
+
 Supported systems: 64-bit Windows 10 and Windows 11 with Windows PowerShell 5.1 or newer. PowerShell 7 is also tested.
 
 Automatic language selection follows the Windows display language. Korean (`ko-*`) receives a Korean interface; other languages currently use English. The easy menu can save a manual English or Korean preference with **G**, and `-Language English` or `-Language Korean` overrides it for one command.
@@ -16,7 +18,8 @@ Automatic language selection follows the Windows display language. Korean (`ko-*
 - Installs only ADB/Fastboot and the DLL/helper files needed for full fastboot formatting support.
 - Adds the `bin` directory to the current user's PATH without administrator rights.
 - Creates a Start Menu shortcut for a localized, keyboard-driven easy menu.
-- Shows ADB serials, model names, and connection states without requiring commands.
+- Guides ADB/Fastboot connection checks with status-specific advice, refresh, diagnosis, and USB driver help.
+- Shows ADB serials, model names, and connection states without requiring commands. Press **C** to choose a target and **A** to give it a short name; the menu remembers five recent choices without automatically selecting one on the next launch.
 - Shows Android version, API level, CPU architecture, and compatibility guidance.
 - Installs one APK or a selected split-APK set and sends multiple selected files to the device's Downloads folder.
 - Accepts files dropped on an installed launcher: APKs are installed one by one; other files are transferred.
@@ -45,11 +48,15 @@ Automatic language selection follows the Windows display language. Korean (`ko-*
 
 First extract the entire ZIP to a normal folder. Do not run the installer from inside Windows Explorer's compressed-folder view. Double-click `Install.cmd`, then choose the standard AppData location, Downloads, Desktop, the portable location beside the extracted installer, or a custom folder. Review the linked Android SDK license and press **Enter** to accept and install. Press **Esc** to cancel.
 
-The interactive installer uses `%LOCALAPPDATA%\LeanADB` as the default when no known installation exists. It also offers the Downloads folder, Desktop, a Windows folder picker, and **P** for a portable `LeanADB-Portable` folder beside the extracted installer. If an existing installation is found, it is shown as the Enter default, but you can choose a different location. Portable mode does not modify the user PATH or Start Menu; keep its folder on the external drive and launch it from there. The installer displays the selected path prominently and opens its `bin` folder after a successful installation. For a standard installation, open **LeanADB** from the Start Menu. Advanced users can open **Open LeanADB Terminal.cmd** or use `adb` and `fastboot` from a newly opened terminal when PATH registration is enabled. A standard installation saves files in Windows Downloads by default; a portable installation saves them in a sibling `LeanADB-Portable-Files` folder by default, outside the installation directory. The terminal opens in this output folder. Press **T**, then **O** in the easy menu to choose Downloads, the sibling folder, or another folder. Uninstall does not remove the sibling output folder.
+The interactive installer uses `%LOCALAPPDATA%\LeanADB` as the default when no known installation exists. It also offers Downloads, Desktop, a folder picker, and **P** for a portable `LeanADB-Portable` folder beside the extracted installer. If an installation exists, it becomes the Enter default; you can still choose another location. Portable mode leaves PATH and the Start Menu unchanged, so you can keep it on an external drive. Installation shows the chosen path prominently and opens its `bin` folder. Standard installations have a Start Menu entry. **Open LeanADB Terminal.cmd** opens the advanced terminal; PATH registration also makes `adb` and `fastboot` available in newly opened terminals.
+
+Standard installations save files in Windows Downloads by default. Portable installations use a sibling `LeanADB-Portable-Files` folder outside the installation directory. The terminal opens in this output folder. Choose **6 > 3** to change the save location; **7** opens it, and **3 > 7** browses recent LeanADB results. Uninstall preserves the sibling output folder.
 
 The Google ZIP itself is downloaded to a temporary directory, validated, and deleted after its selected files are installed. The usable `adb.exe`, `fastboot.exe`, and their required support files remain together in the selected installation folder's `bin` directory. The installer opens that exact folder after completion.
 
-For an offline first install, drag a previously downloaded official Windows Platform-Tools ZIP onto `Install.cmd`, then choose the installation folder and accept the Google SDK license. After installation, drop one or more local files on `Drop files on LeanADB.cmd`. APKs are installed individually; other files go to the phone's Downloads folder. For mixed files, choose whether to transfer all or install APKs and transfer the rest. Use menu option 3 for a split APK set belonging to one app.
+If LeanADB settings or launchers become damaged, run `Repair LeanADB.cmd` in the installation folder. Repair uses the last valid state backup when available; if both state files are unusable, it rebuilds minimal settings only after checking the installed Google-signed Platform-Tools. The easy menu also offers **6 > 2** for Repair. If the Google tools are missing or invalid, Repair reports failure instead of claiming success.
+
+For an offline first install, drag a previously downloaded official Windows Platform-Tools ZIP onto `Install.cmd`, then choose the installation folder and accept the Google SDK license. After installation, drop one or more local files on `Drop files on LeanADB.cmd`. APKs are installed individually; other files go to the phone's Downloads folder. For mixed files, choose whether to transfer all or install APKs and transfer the rest. Use **2 > 1**, then choose **2** for a split APK set belonging to one app.
 
 ## Commands
 
@@ -103,13 +110,29 @@ For a portable/test installation, specify another directory and disable PATH and
 
 ## Update behavior
 
-Opening LeanADB or LeanADB Terminal starts a lightweight background metadata check only when 24 hours have elapsed since the previous successful check. The menu appears immediately. Network errors are non-fatal and use a six-hour retry backoff. When an update is found, the menu displays a notice and option 6 installs it explicitly. A changed package is downloaded to a temporary directory, validated, and then swapped into place.
+Opening LeanADB or LeanADB Terminal starts a lightweight background metadata check only when 24 hours have elapsed since the previous successful check. The menu appears immediately and refreshes update notices when the check finishes. Google tools and LeanADB app checks are independent: a failed feed does not block the other. Network errors are non-fatal and use a six-hour retry backoff. Choose **6 > 1** to explicitly install an available update. A changed package is downloaded to a temporary directory, validated, and swapped into place. Tools, app files, launchers, and settings are restored if a subsequent installation step fails.
 
-The **T > U** menu accepts a local Google ZIP without contacting Google. LeanADB checks archive paths and size, verifies the Google signatures on ADB and Fastboot, and refuses an older package. A local ZIP has no trustworthy online ETag baseline, so LeanADB reports online update availability as unknown until an online package is installed; it does not claim that a local package is the latest online version.
+The **6 > 8** menu accepts a local Google ZIP without contacting Google. LeanADB checks archive paths and size, verifies the Google signatures on ADB and Fastboot, and refuses an older package. A local ZIP has no trustworthy online ETag baseline, so LeanADB reports online update availability as unknown until an online package is installed; a successful metadata check alone does not claim that a local package is the latest online version.
 
 ## Easy menu
 
-The default launcher provides single-key actions for device discovery, device details, `fastboot devices`, single/split APK installation, multiple-file transfer to `/sdcard/Download/`, safe file/folder receiving, screenshots, logcat export, wireless debugging, ADB sideload, confirmed ADB/Fastboot reboot, language selection, update installation, official USB-driver help, and opening the installation folder. Press **T** for Files and Diagnostics: **X** runs read-only connection diagnosis; **F** browses shared storage, including subfolders, and receives a selected file or an entire folder with confirmation; **E** collects a bug report only after a privacy warning and Enter confirmation; **O** changes where local files are saved; **U** installs a local Google ZIP; **V** records the screen for 1–180 seconds and retrieves the MP4. Screen recording requires Android 4.4/API 19 or newer and does not capture audio. **R** in the main menu retains manual remote-path entry. Bug reports may contain sensitive data. APK and ZIP paths are selected through the standard Windows file picker, so spaces and Korean characters do not need manual quoting. Sideload requires the device to show `sideload` in `adb devices`; recovery must enter sideload mode first. Flashing, wiping, and unlocking remain in the advanced terminal.
+The home screen groups actions by what you want to do:
+
+| Key | Task |
+| --- | --- |
+| 1 | Connect a device, authorization guidance, refresh, and driver help |
+| 2 | Install apps: separate APKs or one split-APK set |
+| 3 | Send/receive files, browse device storage, screenshots, and screen recording |
+| 4 | Device details, reboot, sideload, wireless debugging, logs, and bug reports |
+| 5 | Advanced ADB/Fastboot terminal |
+| 6 | Update, repair, save location, language, and diagnostics |
+| 7 | Open saved files or browse recent LeanADB outputs |
+
+The current target, connection state, versions, and save location stay visible on the home screen. Press **C** to choose a target, **A** to give it a short name, **Esc** to go back, or **Q/Esc** at home to exit. Device selection supports multiple pages. The first ADB action selects a target for this session; if it disappears, LeanADB stops the action instead of silently switching phones. Fastboot also requires confirmation if its only device has a different serial.
+
+When selecting multiple APKs, choose separate apps or a split set belonging to one app. File transfers and APK batches show per-file results, save a result report in your chosen folder, and offer **R** inside Apps/Files to retry only failed items on the original target. A failed transfer can leave an incomplete remote file; LeanADB records its path and does not automatically delete device files. Long operations show elapsed time, accept **Esc** to stop the local ADB client, and have a timeout. Stopping the client is not a rollback of changes already performed on the phone.
+
+Screen recording supports 1–180 seconds, requires Android 4.4/API 19 or newer, and does not capture audio. Bug reports may contain sensitive data and require a privacy confirmation. APK and ZIP paths use the standard Windows picker, so spaces and Korean characters do not need manual quoting. Sideload requires recovery to enter sideload mode first. Flashing, wiping, and unlocking remain in the advanced terminal. Existing letter shortcuts such as **S**, **W**, **R**, **L**, **H**, **D**, and **G** remain available from home.
 
 ## Older device compatibility
 
@@ -118,6 +141,10 @@ Google states that current Platform-Tools remain backward compatible with older 
 Use **D** in the easy menu to check an authorized device's Android version and API level. Split APKs need Android 5.0 (API 21) or newer; LeanADB blocks their installation on an identified older device. The **W** menu offers Android 11+ pairing under **P** and older USB-first Wi-Fi setup under **L**. The older method opens port 5555 on the phone, so use a trusted local Wi-Fi network and choose **U** to return to USB mode when done. The **H** help menu can restart ADB using Google's legacy Windows USB backend. This setting persists for LeanADB launchers; an ADB server started by another application may need restarting again. If direct screenshots fail, LeanADB tries `adb shell screencap` followed by `adb pull`.
 
 Google references: https://developer.android.com/tools/releases/platform-tools, https://developer.android.com/tools/adb, and https://developer.android.com/guide/app-bundle/app-bundle-format.
+
+## Validation scope
+
+Automated tests cover Windows PowerShell 5.1 and PowerShell 7, isolated installation/update/removal, archive and signature checks, rollback, localization, command timeouts, and simulated menu/device workflows. No physical Android device testing was performed for version 1.1.0. USB/Fastboot drivers, wireless debugging, APK installation, and capture behavior on individual devices are not hardware-verified.
 
 ## Licensing and trademarks
 

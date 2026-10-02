@@ -38,6 +38,12 @@ jobs:
       - name: Verify sideload targeting and cleanup
         shell: powershell
         run: .\tests\Menu-Actions-Test.ps1
+      - name: Verify settings, bounded commands, and transactional recovery
+        shell: powershell
+        run: .\tests\Hardening-Test.ps1
+      - name: Verify task navigation and safe retry workflows
+        shell: powershell
+        run: .\tests\UX-Test.ps1
       - name: Verify drag-and-drop argument safety
         shell: powershell
         run: .\tests\Drag-Drop-Test.ps1
@@ -81,6 +87,12 @@ jobs:
       - name: Verify PowerShell 7 menu actions
         shell: pwsh
         run: .\tests\Menu-Actions-Test.ps1
+      - name: Verify PowerShell 7 hardening regressions
+        shell: pwsh
+        run: .\tests\Hardening-Test.ps1
+      - name: Verify PowerShell 7 task navigation and retries
+        shell: pwsh
+        run: .\tests\UX-Test.ps1
       - name: Verify PowerShell 7 drag-and-drop launcher
         shell: pwsh
         run: .\tests\Drag-Drop-Test.ps1

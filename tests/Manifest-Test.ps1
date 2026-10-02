@@ -10,6 +10,9 @@ if ($null -eq $definition) { throw 'Get-ProductManifest was not found.' }
 $script:ProductId = 'LeanADB'
 $script:Messages = @{ InvalidManifest = 'Invalid manifest.' }
 $manifestJson = '{"ProductId":"LeanADB","Version":"1.0.1","Package":{"FileName":"LeanADB-bootstrap-v1.0.1.zip","Sha256":"abc"},"Files":[{"Path":"VERSION","Sha256":"def"}]}'
+$manifestJson = $manifestJson.Replace('abc',('a' * 64)).Replace('def',('b' * 64))
+$versionFunction = $ast.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Convert-SemVerParts'},$true)
+. ([scriptblock]::Create($versionFunction.Extent.Text))
 
 function Invoke-WebRequest {
     param([string]$Uri)

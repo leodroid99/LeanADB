@@ -1,9 +1,11 @@
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
+$scriptPath = Join-Path $projectRoot 'LeanADB.ps1'
 $manifestPath = Join-Path $projectRoot 'dist\LeanADB-release.json'
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('LeanADB-SelfUpdate-' + [guid]::NewGuid().ToString('N'))
 $errorLogPath = Join-Path ([IO.Path]::GetTempPath()) 'LeanADB-install-error.log'
 $errorLogExisted = Test-Path -LiteralPath $errorLogPath -PathType Leaf
+$originalErrorLogBytes = if ($errorLogExisted) { [IO.File]::ReadAllBytes($errorLogPath) } else { $null }
 
 try {
     if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
@@ -17,7 +19,7 @@ try {
         ProductId = 'LeanADB'
         Publisher = 'leodroid99'
         LeanADBVersion = '0.4.0-alpha'
-        InstalledVersion = 'test'
+        InstalledVersion = '37.0.1'
         LastCheckUtc = [DateTime]::UtcNow.ToString('o')
         PathRegistered = $false
         ShortcutRegistered = $false
@@ -32,6 +34,10 @@ try {
     if ($state.LeanADBVersion -ne $manifest.Version) {
         throw 'Self-update did not record the new LeanADB version.'
     }
+    $stateBackupPath = Join-Path $testRoot 'state.json.bak'
+    if (-not (Test-Path -LiteralPath $stateBackupPath -PathType Leaf)) {
+        throw 'Self-update did not create a state backup.'
+    }
     foreach ($entry in $manifest.Files) {
         $target = Join-Path $testRoot ([string]$entry.Path).Replace('/', '\')
         $hash = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -40,6 +46,9 @@ try {
         }
     }
 
+    # Keep the installed state from the published package, then exercise rollback with the current development script.
+    Copy-Item -LiteralPath $scriptPath -Destination (Join-Path $testRoot 'LeanADB.ps1') -Force
+    Add-Content -LiteralPath (Join-Path $testRoot 'LeanADB.ps1') -Value '# Isolated old-script rollback marker.' -Encoding UTF8
     $beforeScriptHash = (Get-FileHash -LiteralPath (Join-Path $testRoot 'LeanADB.ps1') -Algorithm SHA256).Hash
     $busyManifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
     $busyManifest.Version = '999.0.0-alpha'
@@ -63,7 +72,10 @@ try {
     }
 
     $badManifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    $badManifest.Version = '999.0.0-alpha'
+    $hashTestState = Get-Content -LiteralPath (Join-Path $testRoot 'state.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    $hashTestState.LeanADBVersion = '0.0.0'
+    $hashTestState | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $testRoot 'state.json') -Encoding UTF8
+    Copy-Item -LiteralPath (Join-Path $testRoot 'state.json') -Destination $stateBackupPath -Force
     $badManifest.Files[1].Sha256 = ('0' * 64)
     $badManifest.Package | Add-Member -NotePropertyName Url -NotePropertyValue $artifactUri -Force
     $badManifestPath = Join-Path $testRoot 'bad-manifest.json'
@@ -76,13 +88,44 @@ try {
     }
     $afterFailureState = Get-Content -LiteralPath (Join-Path $testRoot 'state.json') -Raw -Encoding UTF8 | ConvertFrom-Json
     $afterFailureHash = (Get-FileHash -LiteralPath (Join-Path $testRoot 'LeanADB.ps1') -Algorithm SHA256).Hash
-    if ($afterFailureState.LeanADBVersion -ne $manifest.Version -or $afterFailureHash -ne $beforeScriptHash) {
+    if ($afterFailureState.LeanADBVersion -ne '0.0.0' -or $afterFailureHash -ne $beforeScriptHash) {
         throw 'Self-update rollback did not restore files and state after verification failure.'
+    }
+
+    $lateState = Get-Content -LiteralPath (Join-Path $testRoot 'state.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    $lateState.LeanADBVersion = '0.0.0'
+    $lateState | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $testRoot 'state.json') -Encoding UTF8
+    Copy-Item -LiteralPath (Join-Path $testRoot 'state.json') -Destination $stateBackupPath -Force
+    $stateHashBeforeRollback = (Get-FileHash -LiteralPath (Join-Path $testRoot 'state.json') -Algorithm SHA256).Hash
+    $backupHashBeforeRollback = (Get-FileHash -LiteralPath $stateBackupPath -Algorithm SHA256).Hash
+    $lateFailureManifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $lateFailureManifest.Package | Add-Member -NotePropertyName Url -NotePropertyValue $artifactUri -Force
+    $lateFailureManifestPath = Join-Path $testRoot 'late-failure-manifest.json'
+    $lateFailureManifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $lateFailureManifestPath -Encoding UTF8
+    $launcherPath = Join-Path $testRoot 'Open LeanADB.cmd'
+    $launcherBytes = [IO.File]::ReadAllBytes($launcherPath)
+    Remove-Item -LiteralPath $launcherPath -Force
+    New-Item -ItemType Directory -Path $launcherPath | Out-Null
+    try {
+        & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $testRoot 'LeanADB.ps1') `
+            -Action SelfUpdate -InstallPath $testRoot -ProductManifestUrl (([Uri]$lateFailureManifestPath).AbsoluteUri) -Quiet *> $null
+        if ($LASTEXITCODE -eq 0) { throw 'A self-update with a directory blocking launcher creation unexpectedly succeeded.' }
+    }
+    finally {
+        Remove-Item -LiteralPath $launcherPath -Force
+        [IO.File]::WriteAllBytes($launcherPath, $launcherBytes)
+    }
+    $stateRestored = (Get-FileHash -LiteralPath (Join-Path $testRoot 'state.json') -Algorithm SHA256).Hash -eq $stateHashBeforeRollback
+    $backupRestored = (Get-FileHash -LiteralPath $stateBackupPath -Algorithm SHA256).Hash -eq $backupHashBeforeRollback
+    $scriptRestored = (Get-FileHash -LiteralPath (Join-Path $testRoot 'LeanADB.ps1') -Algorithm SHA256).Hash -eq $beforeScriptHash
+    if (-not $stateRestored -or -not $backupRestored -or -not $scriptRestored) {
+        throw "Self-update late rollback mismatch: primary=$stateRestored backup=$backupRestored script=$scriptRestored"
     }
     $global:LASTEXITCODE = 0
     Write-Host "LeanADB self-update test passed for $($manifest.Version)."
 }
 finally {
+    if ($errorLogExisted) { [IO.File]::WriteAllBytes($errorLogPath, $originalErrorLogBytes) }
     if (-not $errorLogExisted -and (Test-Path -LiteralPath $errorLogPath -PathType Leaf)) {
         Remove-Item -LiteralPath $errorLogPath -Force
     }

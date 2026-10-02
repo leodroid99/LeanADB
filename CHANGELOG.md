@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.1.0 - 2026-10-02
+
+- Group the home menu by task, show the current target/save location, and add recent-output browsing and paged device selection.
+- Ask whether multiple APKs are separate apps or one split set; report batch results and retry only failed items on the original device.
+- Add elapsed-time progress, Esc cancellation, bounded native commands, binary-safe capture, and actionable installation error guidance.
+- Keep Google and app update checks independent, preserve offline provenance across retries, and refresh background update notices live.
+- Roll back tools, app files, settings, and launchers after late update failures; hand combined updates to the newly installed script.
+- Validate state types and wireless ports, constrain product archives and versions, and synchronize deferred removal with updates.
+- Require confirmation before selecting a Fastboot serial different from the pinned ADB device; improve USB/Wi-Fi transitions and mDNS discovery.
+- Add strict-mode hardening regressions for zero/one/many devices, pagination, feed failures, binary output, timeouts, and late tool rollback.
+- Accept canonical Windows ZIP separators without permitting traversal or duplicates, and retry partially completed removal under the ownership lock.
+- Keep a validated backup of installation state and let Repair recover settings or rebuild minimal state from verified Google Platform-Tools.
+- Add a Repair launcher and easy-menu entry, and reject repair when required Google tools are missing or invalid.
+- Restore both state files if a LeanADB self-update fails after replacing files.
+- Make Windows launchers report failed exit codes and isolate Windows PowerShell from inherited PowerShell 7 module paths.
+- Keep the selected ADB device fixed during an easy-menu session and require explicit reselection when it becomes unavailable.
+- Turn menu option 1 into a connection guide with status-specific advice, refresh, target selection, full diagnosis, and USB driver help.
+- Add optional device names and five recent choices, preserve them through Platform-Tools updates, and keep target selection explicit each session.
+
 ## 1.0.1
 
 - Parse GitHub release manifests served as octet-stream bytes on Windows PowerShell, so LeanADB self-update checks work with the public release URL.

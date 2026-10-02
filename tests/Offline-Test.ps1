@@ -29,11 +29,15 @@ try {
 
     $outputFolder = Join-Path $testRoot 'saved-files'
     $state | Add-Member -NotePropertyName OutputFolder -NotePropertyValue $outputFolder -Force
+    $state | Add-Member -NotePropertyName DeviceAliases -NotePropertyValue @([pscustomobject]@{ Serial = 'SERIAL123'; Alias = 'Test phone' }) -Force
+    $state | Add-Member -NotePropertyName RecentDevices -NotePropertyValue @('SERIAL123', 'SERIAL456') -Force
     $state | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $statePath -Encoding UTF8
     & $scriptPath -Action Update -InstallPath $installRoot -OfflineZipPath $zipPath -Quiet
     Assert-True ($LASTEXITCODE -eq 0) 'Offline update failed.'
     $updated = Get-Content -LiteralPath $statePath -Raw -Encoding UTF8 | ConvertFrom-Json
     Assert-True ($updated.OutputFolder -eq $outputFolder) 'Update erased the selected file save location.'
+    Assert-True ($updated.DeviceAliases.Count -eq 1 -and $updated.DeviceAliases[0].Alias -eq 'Test phone') 'Update erased device aliases.'
+    Assert-True ((@($updated.RecentDevices) -join '|') -eq 'SERIAL123|SERIAL456') 'Update erased recent device choices.'
     Assert-True ($updated.LastCheckStatus -eq 'Offline') 'Offline update claimed online freshness.'
 
     Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -58,6 +62,8 @@ try {
 
     & (Join-Path $installRoot 'LeanADB.ps1') -Action Uninstall -InstallPath $installRoot -Quiet
     Assert-True ($LASTEXITCODE -eq 0) 'Offline test uninstall failed.'
+    for ($attempt = 0; $attempt -lt 160 -and (Test-Path -LiteralPath $installRoot); $attempt++) { Start-Sleep -Milliseconds 250 }
+    Assert-True (-not (Test-Path -LiteralPath $installRoot)) 'Deferred offline uninstall did not finish.'
     Write-Host "LeanADB offline install/update test passed for Platform-Tools $($updated.InstalledVersion)."
 }
 finally {

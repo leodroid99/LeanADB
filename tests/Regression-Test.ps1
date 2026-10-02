@@ -6,6 +6,9 @@ $testPrefix = 'Lean ADB ' + $unicodeWord + ' & bang! [space]-'
 $testRoot = Join-Path ([System.IO.Path]::GetTempPath()) ($testPrefix + [guid]::NewGuid().ToString('N'))
 $testFilesRoot = $testRoot + '-Files'
 $pathBefore = [Environment]::GetEnvironmentVariable('Path', 'User')
+$errorLogPath = Join-Path ([IO.Path]::GetTempPath()) 'LeanADB-install-error.log'
+$errorLogExisted = Test-Path -LiteralPath $errorLogPath -PathType Leaf
+$originalErrorLogBytes = if ($errorLogExisted) { [IO.File]::ReadAllBytes($errorLogPath) } else { $null }
 $uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\LeanADB'
 $uninstallLocationBefore = if (Test-Path -LiteralPath $uninstallKey) { [string](Get-ItemProperty -LiteralPath $uninstallKey).InstallLocation } else { '' }
 
@@ -25,6 +28,7 @@ try {
     Assert-True ($LASTEXITCODE -ne 0) 'LeanADB accepted LocalAppData itself as an unsafe installation root.'
 
     & $scriptPath -Action Install -AcceptSdkLicense -InstallPath $testRoot -NoPath -NoShortcut -Quiet
+    Assert-True ($LASTEXITCODE -eq 0) 'LeanADB installation returned a failure exit code.'
 
     $statePath = Join-Path $testRoot 'state.json'
     Assert-True (Test-Path -LiteralPath $statePath -PathType Leaf) 'state.json was not created.'
@@ -53,6 +57,8 @@ try {
 
     $menuLauncher = Join-Path $testRoot 'Open LeanADB.cmd'
     Assert-True (Test-Path -LiteralPath $menuLauncher -PathType Leaf) 'Easy-menu launcher was not created.'
+    $repairLauncher = Join-Path $testRoot 'Repair LeanADB.cmd'
+    Assert-True (Test-Path -LiteralPath $repairLauncher -PathType Leaf) 'Repair launcher was not created.'
     $menuLauncherText = Get-Content -LiteralPath $menuLauncher -Raw
     Assert-True ($menuLauncherText -match '-Action Menu') 'Easy-menu launcher does not start the Menu action.'
     Assert-True ($menuLauncherText -match '-Action AutoUpdate') 'Easy-menu launcher does not check for updates.'
@@ -73,6 +79,57 @@ try {
     Assert-True ($adbVersion -match [regex]::Escape([string]$state.InstalledVersion)) 'ADB version mismatch.'
     Assert-True ($fastbootVersion -match [regex]::Escape([string]$state.InstalledVersion)) 'Fastboot version mismatch.'
 
+    $stateBackupPath = Join-Path $testRoot 'state.json.bak'
+    Assert-True (Test-Path -LiteralPath $stateBackupPath -PathType Leaf) 'The initial install did not create a state backup.'
+    $state | Add-Member -NotePropertyName LanguagePreference -NotePropertyValue 'Korean' -Force
+    $state | Add-Member -NotePropertyName OutputFolder -NotePropertyValue $testFilesRoot -Force
+    $state | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $statePath -Encoding UTF8
+    Copy-Item -LiteralPath $statePath -Destination $stateBackupPath -Force
+
+    Set-Content -LiteralPath $statePath -Value '{broken primary' -Encoding ASCII
+    & (Join-Path $testRoot 'LeanADB.ps1') -Action Repair -InstallPath $testRoot -Quiet
+    Assert-True ($LASTEXITCODE -eq 0) 'Repair could not recover a corrupt primary state from its backup.'
+    $repairedState = Get-Content -LiteralPath $statePath -Raw -Encoding UTF8 | ConvertFrom-Json
+    Assert-True ($repairedState.LanguagePreference -eq 'Korean') 'Repair discarded the saved language preference.'
+    Assert-True ($repairedState.OutputFolder -eq $testFilesRoot) 'Repair discarded the saved output folder.'
+
+    Remove-Item -LiteralPath $statePath -Force
+    & (Join-Path $testRoot 'LeanADB.ps1') -Action Repair -InstallPath $testRoot -Quiet
+    Assert-True ($LASTEXITCODE -eq 0) 'Repair could not recover a missing primary state from its backup.'
+    $repairedState = Get-Content -LiteralPath $statePath -Raw -Encoding UTF8 | ConvertFrom-Json
+    Assert-True ($repairedState.OutputFolder -eq $testFilesRoot) 'Repair did not preserve settings after a missing primary state.'
+
+    Set-Content -LiteralPath $statePath -Value '{broken primary' -Encoding ASCII
+    Set-Content -LiteralPath $stateBackupPath -Value '{broken backup' -Encoding ASCII
+    & $repairLauncher
+    Assert-True ($LASTEXITCODE -eq 0) 'Repair launcher could not rebuild state from verified installed Platform-Tools.'
+    $repairedState = Get-Content -LiteralPath $statePath -Raw -Encoding UTF8 | ConvertFrom-Json
+    Assert-True ($repairedState.InstalledVersion -eq $state.InstalledVersion) 'Rebuilt state has the wrong Platform-Tools version.'
+    Assert-True (-not [bool]$repairedState.PathRegistered -and -not [bool]$repairedState.ShortcutRegistered) 'Portable repair added user integration.'
+    Assert-True (Test-Path -LiteralPath $stateBackupPath -PathType Leaf) 'Rebuilt state has no backup.'
+
+    $stateHashBeforeFailure = (Get-FileHash -LiteralPath $statePath -Algorithm SHA256).Hash
+    $backupHashBeforeFailure = (Get-FileHash -LiteralPath $stateBackupPath -Algorithm SHA256).Hash
+    $savedFastboot = Join-Path $testRoot 'fastboot.exe.saved'
+    Move-Item -LiteralPath $fastboot -Destination $savedFastboot
+    try {
+        & (Join-Path $testRoot 'LeanADB.ps1') -Action Repair -InstallPath $testRoot -Quiet *> $null
+        Assert-True ($LASTEXITCODE -ne 0) 'Repair claimed success while fastboot.exe was missing.'
+        Assert-True ((Get-FileHash -LiteralPath $statePath -Algorithm SHA256).Hash -eq $stateHashBeforeFailure) 'Failed repair changed primary state.'
+        Assert-True ((Get-FileHash -LiteralPath $stateBackupPath -Algorithm SHA256).Hash -eq $backupHashBeforeFailure) 'Failed repair changed backup state.'
+    }
+    finally { Move-Item -LiteralPath $savedFastboot -Destination $fastboot }
+
+    $savedAdb = Join-Path $testRoot 'adb.exe.saved'
+    Copy-Item -LiteralPath $adb -Destination $savedAdb
+    try {
+        Set-Content -LiteralPath $adb -Value 'tampered' -Encoding ASCII
+        & (Join-Path $testRoot 'LeanADB.ps1') -Action Repair -InstallPath $testRoot -Quiet *> $null
+        Assert-True ($LASTEXITCODE -ne 0) 'Repair claimed success with a tampered adb.exe.'
+        Assert-True ((Get-FileHash -LiteralPath $statePath -Algorithm SHA256).Hash -eq $stateHashBeforeFailure) 'Failed signature verification changed primary state.'
+    }
+    finally { Copy-Item -LiteralPath $savedAdb -Destination $adb -Force }
+
     $savedPreference = $ErrorActionPreference
     $ErrorActionPreference = 'SilentlyContinue'
     & $adb start-server 2>&1 | Out-Null
@@ -88,6 +145,9 @@ try {
     Assert-True ($LASTEXITCODE -eq 0) 'LeanADB device discovery failed after a clean ADB server start.'
 
     $updateLauncher = Join-Path $testRoot 'Update LeanADB.cmd'
+    $updateLauncherText = Get-Content -LiteralPath $updateLauncher -Raw
+    Assert-True ($updateLauncherText -match 'set "PSModulePath="') 'Update launcher inherits incompatible PowerShell module paths.'
+    Assert-True ($updateLauncherText -match 'exit /b %LEANADB_EXIT_CODE%') 'Update launcher does not propagate failures.'
     & $updateLauncher
     $updateExitCode = $LASTEXITCODE
     Assert-True ($updateExitCode -eq 0) "Generated update launcher failed with exit code $updateExitCode."
@@ -104,7 +164,7 @@ try {
     & $uninstallLauncher /quiet
     $uninstallExitCode = $LASTEXITCODE
     Assert-True ($uninstallExitCode -eq 0) "Generated uninstaller failed with exit code $uninstallExitCode."
-    for ($attempt = 0; $attempt -lt 20 -and (Test-Path -LiteralPath $testRoot); $attempt++) {
+    for ($attempt = 0; $attempt -lt 160 -and (Test-Path -LiteralPath $testRoot); $attempt++) {
         Start-Sleep -Milliseconds 250
     }
     Assert-True (-not (Test-Path -LiteralPath $testRoot)) 'Generated uninstaller left the installation directory behind.'
@@ -115,6 +175,8 @@ try {
     Write-Host "LeanADB regression test passed for Platform-Tools $($state.InstalledVersion)."
 }
 finally {
+    if ($errorLogExisted) { [IO.File]::WriteAllBytes($errorLogPath, $originalErrorLogBytes) }
+    elseif (Test-Path -LiteralPath $errorLogPath -PathType Leaf) { Remove-Item -LiteralPath $errorLogPath -Force }
     [Environment]::SetEnvironmentVariable('Path', $pathBefore, 'User')
     $tempBase = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd('\')
     $resolvedTestRoot = [System.IO.Path]::GetFullPath($testRoot).TrimEnd('\')

@@ -1,5 +1,6 @@
 @echo off
 setlocal
+set "PSModulePath="
 title LeanADB Installer by leodroid99
 
 if not exist "%~dp0LeanADB.ps1" (

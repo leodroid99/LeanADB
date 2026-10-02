@@ -37,6 +37,9 @@ try {
     if ($missingKeys.Count -or $extraKeys.Count) {
         throw "Localization keys differ. Missing Korean: $($missingKeys -join ', '); extra Korean: $($extraKeys -join ', ')"
     }
+    $referencedKeys = @([regex]::Matches($source,'\$script:Messages\.([A-Za-z][A-Za-z0-9]*)') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+    $undefinedKeys = @($referencedKeys | Where-Object { $_ -notin $englishKeys -and $_ -notin @('ContainsKey','Keys','Values','Count','Clone') })
+    if ($undefinedKeys.Count) { throw "UI references undefined messages: $($undefinedKeys -join ', ')" }
     Write-Host "LeanADB language test passed ($($englishKeys.Count) messages)."
 }
 finally {
